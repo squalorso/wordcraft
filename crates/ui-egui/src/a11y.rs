@@ -136,7 +136,15 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
 
 /// Build the description of pages `pages.0..pages.1`.
 pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pages: (usize, usize), sel: (&Pos, &Pos)) -> Tree {
-    let mut b = Builder { doc, doc_id, tree: Tree::default(), index: HashMap::new(), lists: HashMap::new(), offsets: HashMap::new() };
+    let mut b = Builder {
+        doc,
+        doc_id,
+        tree: Tree::default(),
+        index: HashMap::new(),
+        lists: HashMap::new(),
+        offsets: HashMap::new(),
+        word_stops: HashSet::new(),
+    };
     for pi in pages.0..pages.1 {
         let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { continue };
         let scale = crate::canvas::page_screen_scale(*pr, page, 1.0);
@@ -195,6 +203,9 @@ struct Builder<'a> {
     lists: HashMap<Id, (Id, usize)>,
     /// Per paragraph: (byte offset, text run, character index) of each cluster, in text order.
     offsets: HashMap<Vec<u32>, Vec<(usize, Id, usize)>>,
+    /// The byte offsets where Ctrl+Right stops in the paragraph being described: the starts of
+    /// its words, as the caret sees them.
+    word_stops: HashSet<usize>,
 }
 
 /// One text run being gathered.
@@ -336,6 +347,7 @@ impl Builder<'_> {
         let Some(pid) = self.para_node(path, para) else { return };
         let Some(dp) = self.doc.para(StoryRef::Body, path) else { return };
         let links = links(dp);
+        self.word_stops = word_stops(dp);
         let first_top = para.lines.get(lines.start).map_or(0.0, |l| l.top);
         for li in lines {
             let Some(line) = para.lines.get(li) else { break };
@@ -446,7 +458,16 @@ impl Builder<'_> {
             n.set_character_positions(run.xs.iter().map(|c| (c.0 - x0) * at.scale).collect::<Vec<f32>>());
             n.set_character_widths(run.xs.iter().map(|c| c.1 * at.scale).collect::<Vec<f32>>());
         }
-        n.set_word_starts(word_starts(&run.text, &run.lens));
+        // The words a screen reader moves by are the caret's: the clusters of this run where
+        // Ctrl+Right stops, its first one included when a word starts there (a wrapped line, a
+        // link), as AccessKit expects.
+        let starts: Vec<u8> = lb
+            .map
+            .iter()
+            .filter(|(off, seg, idx)| *seg == lb.seg && *idx < run.lens.len() && self.word_stops.contains(off))
+            .filter_map(|(_, _, idx)| u8::try_from(*idx).ok())
+            .collect();
+        n.set_word_starts(starts);
         n.set_value(run.text);
         n.set_character_lengths(run.lens.clone());
         if let Some((pseg, _)) = lb.prev {
@@ -511,19 +532,19 @@ fn push_char(run: &mut Run, text: &str, x: f32, w: f32) {
     run.xs.push((x, w));
 }
 
-/// Characters where a word starts (after one that isn't part of a word).
-fn word_starts(text: &str, lens: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let (mut at, mut after_gap) = (0usize, true);
-    for (i, len) in lens.iter().enumerate() {
-        let word = text.get(at..).and_then(|s| s.chars().next()).is_some_and(|c| c.is_alphanumeric() || c == '_');
-        if word && after_gap && i > 0 {
-            out.push(u8::try_from(i).unwrap_or(u8::MAX));
+/// The byte offsets where Ctrl+Right stops in `p`, from its start: Word's words, so punctuation
+/// is a word of its own.
+fn word_stops(p: &wordcraft_doc::Paragraph) -> HashSet<usize> {
+    let mut stops = HashSet::from([0]);
+    let mut off = 0;
+    loop {
+        let next = p.word_end(off);
+        if next <= off || next >= p.len() {
+            return stops;
         }
-        after_gap = !word;
-        at += usize::from(*len);
+        stops.insert(next);
+        off = next;
     }
-    out
 }
 
 /// The paragraph's hyperlinked byte ranges and their targets.
@@ -632,6 +653,34 @@ mod tests {
             at = parent.get(&id).copied();
         }
         assert!(in_table, "the described caret is the preview's, inside the preview table");
+    }
+
+    /// #3173: the words a screen reader moves by are the caret's (where Ctrl+Right stops), and a
+    /// text run that starts with a word says so: a link, the first word of a wrapped line and
+    /// punctuation are words of their own, not part of the word before.
+    #[test]
+    fn text_runs_start_words_where_ctrl_right_stops() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for (cmd, p) in [
+            ("text.insert", json!({"text": "wrapping ".repeat(60)})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "Read this "})),
+            ("insert.link", json!({"url": "https://example.com", "text": "link"})),
+            ("text.insert", json!({"text": ", then stop."})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let update = described(&mut app, &egui::Context::default());
+        let runs: Vec<&Node> = update.nodes.iter().map(|(_, n)| n).filter(|n| n.role() == Role::TextRun).collect();
+        let values = || runs.iter().map(|n| n.value()).collect::<Vec<_>>();
+        let run = |text: &str| *runs.iter().find(|n| n.value() == Some(text)).unwrap_or_else(|| panic!("no run {text:?} in {:?}", values()));
+        assert_eq!(run("Read this ").word_starts(), [0, 5]);
+        assert_eq!(run("link").word_starts(), [0]);
+        assert_eq!(run(", then stop.\n").word_starts(), [0, 2, 7, 11]);
+        // Each line of the wrapped paragraph is a run of its own, and starts with a word.
+        let wrapped: Vec<&&Node> = runs.iter().filter(|n| n.value().is_some_and(|v| v.starts_with("wrapping"))).collect();
+        assert!(wrapped.len() > 1, "the paragraph wraps: {:?}", values());
+        assert!(wrapped.iter().all(|n| n.word_starts().first() == Some(&0)), "a line's first word");
     }
 
     /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
