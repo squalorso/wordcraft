@@ -278,6 +278,23 @@ fn tab_and_shift_tab_select_the_next_and_previous_cell() {
 }
 
 #[test]
+fn tab_and_shift_tab_into_a_cell_that_starts_with_a_nested_table_stay_in_it() {
+    for (from, key) in [(2, "text.backTab"), (0, "text.tab")] {
+        let mut s = table_between(1, 1);
+        run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+        let outer = s.doc.body.get(1).and_then(|b| b.as_table()).expect("the outer table");
+        assert!(outer.rows[1].cells[1].blocks.first().is_some_and(|b| b.as_table().is_some()), "setup: b2 starts with a table");
+        run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, from, 0], "off": 0}}));
+        run(&mut s, key, json!({}));
+        for end in [&s.sel.anchor, &s.sel.focus] {
+            assert!(end.path.0.starts_with(&[1, 1, 1]), "{key} selects only b2: {:?}", s.sel);
+        }
+        typ(&mut s, "Z");
+        assert_eq!(table_cells(&s)[1][0], "a2", "{key}: typing leaves a2 alone");
+    }
+}
+
+#[test]
 fn up_and_down_leave_a_selection_from_its_start_and_its_end() {
     let mut s = typed("One\nTwo words here\nThree is a longer line\nFour");
     let press = |s: &mut Session, sel: Selection, id: &str| {
@@ -298,6 +315,9 @@ fn up_and_down_leave_a_selection_from_its_start_and_its_end() {
     assert_eq!(press(&mut s, words, "caret.down"), press(&mut s, caret(Pos::body(1, 9)), "caret.down"));
     // "is a" selected left to right: Up goes from its start.
     let is_a = Selection { anchor: Pos::body(2, 6), focus: Pos::body(2, 10) };
+    assert_eq!(press(&mut s, is_a, "caret.up"), press(&mut s, caret(Pos::body(2, 6)), "caret.up"));
+    // And right to left: Up still goes from its start.
+    let is_a = Selection { anchor: Pos::body(2, 10), focus: Pos::body(2, 6) };
     assert_eq!(press(&mut s, is_a, "caret.up"), press(&mut s, caret(Pos::body(2, 6)), "caret.up"));
 }
 

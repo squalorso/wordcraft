@@ -281,17 +281,15 @@ pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
     crate::cmd::para::outdent(s, &Value::Null)
 }
 
-/// Tab and Shift+Tab land in a cell with its content selected, like Word.
+/// Tab and Shift+Tab land in a cell with its content selected, like Word. The selection runs from
+/// the cell's first paragraph to its last, so it stays in the cell when that starts with a table.
 fn select_cell(s: &mut Session, story: StoryRef, table: &Path, r: usize, c: usize) -> CmdResult {
     let mut cell = table.0.clone();
     cell.extend([r as u32, c as u32]);
-    let mut first = cell.clone();
-    first.push(0);
-    let start = Pos { story, path: Path(first), off: 0 };
-    let end = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&cell)).map(|q| {
-        let off = s.doc.para(story, &q).map(|x| x.len()).unwrap_or(0);
-        Pos { story, path: q, off }
-    });
-    s.sel = Selection { anchor: start.clone(), focus: end.unwrap_or(start) };
+    let mut paras = s.doc.para_paths(story).into_iter().filter(|q| q.0.starts_with(&cell));
+    let Some(first) = paras.next() else { return sel_result(s) };
+    let last = paras.next_back().unwrap_or_else(|| first.clone());
+    let off = s.doc.para(story, &last).map(|x| x.len()).unwrap_or(0);
+    s.sel = Selection { anchor: Pos { story, path: first, off: 0 }, focus: Pos { story, path: last, off } };
     sel_result(s)
 }
