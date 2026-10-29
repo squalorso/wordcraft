@@ -136,15 +136,8 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
 
 /// Build the description of pages `pages.0..pages.1`.
 pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pages: (usize, usize), sel: (&Pos, &Pos)) -> Tree {
-    let mut b = Builder {
-        doc,
-        doc_id,
-        tree: Tree::default(),
-        index: HashMap::new(),
-        lists: HashMap::new(),
-        offsets: HashMap::new(),
-        word_stops: HashSet::new(),
-    };
+    let mut b =
+        Builder { doc, doc_id, tree: Tree::default(), index: HashMap::new(), lists: HashMap::new(), offsets: HashMap::new(), word_stops: Vec::new() };
     for pi in pages.0..pages.1 {
         let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { continue };
         let scale = crate::canvas::page_screen_scale(*pr, page, 1.0);
@@ -203,9 +196,9 @@ struct Builder<'a> {
     lists: HashMap<Id, (Id, usize)>,
     /// Per paragraph: (byte offset, text run, character index) of each cluster, in text order.
     offsets: HashMap<Vec<u32>, Vec<(usize, Id, usize)>>,
-    /// The byte offsets where Ctrl+Right stops in the paragraph being described: the starts of
-    /// its words, as the caret sees them.
-    word_stops: HashSet<usize>,
+    /// The byte offsets where Ctrl+Right stops in the lines being described, in order: the starts
+    /// of their words, as the caret sees them.
+    word_stops: Vec<usize>,
 }
 
 /// One text run being gathered.
@@ -347,7 +340,9 @@ impl Builder<'_> {
         let Some(pid) = self.para_node(path, para) else { return };
         let Some(dp) = self.doc.para(StoryRef::Body, path) else { return };
         let links = links(dp);
-        self.word_stops = word_stops(dp);
+        let span =
+            para.lines.get(lines.start).map_or(0, |l| l.start)..lines.end.checked_sub(1).and_then(|li| para.lines.get(li)).map_or(0, |l| l.stop);
+        self.word_stops = dp.word_stops(span);
         let first_top = para.lines.get(lines.start).map_or(0.0, |l| l.top);
         for li in lines {
             let Some(line) = para.lines.get(li) else { break };
@@ -461,12 +456,15 @@ impl Builder<'_> {
         // The words a screen reader moves by are the caret's: the clusters of this run where
         // Ctrl+Right stops, its first one included when a word starts there (a wrapped line, a
         // link), as AccessKit expects.
-        let starts: Vec<u8> = lb
+        // A stop at a mark that shows nothing (a page break, a content control's edge) starts the
+        // same character as the stop after it.
+        let mut starts: Vec<u8> = lb
             .map
             .iter()
-            .filter(|(off, seg, idx)| *seg == lb.seg && *idx < run.lens.len() && self.word_stops.contains(off))
+            .filter(|(off, seg, idx)| *seg == lb.seg && *idx < run.lens.len() && self.word_stops.binary_search(off).is_ok())
             .filter_map(|(_, _, idx)| u8::try_from(*idx).ok())
             .collect();
+        starts.dedup();
         n.set_word_starts(starts);
         n.set_value(run.text);
         n.set_character_lengths(run.lens.clone());
@@ -530,21 +528,6 @@ fn push_char(run: &mut Run, text: &str, x: f32, w: f32) {
     run.lens.push(len);
     let (x, w) = (if x.is_finite() { x } else { 0.0 }, if w.is_finite() { w } else { 0.0 });
     run.xs.push((x, w));
-}
-
-/// The byte offsets where Ctrl+Right stops in `p`, from its start: Word's words, so punctuation
-/// is a word of its own.
-fn word_stops(p: &wordcraft_doc::Paragraph) -> HashSet<usize> {
-    let mut stops = HashSet::from([0]);
-    let mut off = 0;
-    loop {
-        let next = p.word_end(off);
-        if next <= off || next >= p.len() {
-            return stops;
-        }
-        stops.insert(next);
-        off = next;
-    }
 }
 
 /// The paragraph's hyperlinked byte ranges and their targets.
@@ -681,6 +664,27 @@ mod tests {
         let wrapped: Vec<&&Node> = runs.iter().filter(|n| n.value().is_some_and(|v| v.starts_with("wrapping"))).collect();
         assert!(wrapped.len() > 1, "the paragraph wraps: {:?}", values());
         assert!(wrapped.iter().all(|n| n.word_starts().first() == Some(&0)), "a line's first word");
+    }
+
+    /// #3173: a bookmark around a paragraph (as a table of contents leaves on a heading) or inside
+    /// a word adds no word for a screen reader, as it adds no stop for Ctrl+Right.
+    #[test]
+    fn bookmarks_add_no_words_for_screen_readers() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for (cmd, p) in [
+            ("text.insert", json!({"text": "Bookmarked words"})),
+            ("select.text", json!({"text": "Bookmarked words"})),
+            ("insert.bookmark", json!({"name": "_Toc1"})),
+            ("select.text", json!({"text": "rd"})),
+            ("insert.bookmark", json!({"name": "Inside"})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let marks = app.session.doc.para(StoryRef::Body, &Path(vec![0])).map_or(0, |p| p.text.matches('\u{FFFC}').count());
+        assert_eq!(marks, 4, "two bookmarks");
+        let update = described(&mut app, &egui::Context::default());
+        let run = update.nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::TextRun && n.value() == Some("Bookmarked words\n"));
+        assert_eq!(run.map(Node::word_starts), Some(&[0, 11][..]));
     }
 
     /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
