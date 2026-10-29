@@ -579,22 +579,23 @@ impl Paragraph {
     /// Where Ctrl+Right stops in `range` ([`Self::word_end`]): the starts of the words there, the
     /// paragraph's start included and its end not. Ctrl+Right always stops at the first word
     /// after a space, wherever it started, so the walk begins at the last space before `range`:
-    /// a long paragraph costs only the part asked for.
+    /// in a long paragraph, only the marks before it are counted, and nothing past the range is
+    /// kept.
     pub fn word_stops(&self, range: std::ops::Range<usize>) -> Vec<usize> {
         let from = self.text.get(..range.start).and_then(|t| t.rfind([' ', NBSP])).unwrap_or(0);
-        // The markers words run through from there, found in one pass: `object_at` counts the
-        // objects before each one again.
-        let objects = self.objects.iter().skip(self.objects_before(from));
-        let marks: Vec<usize> = self
-            .text
-            .get(from..)
-            .unwrap_or("")
-            .match_indices(OBJ)
-            .zip(objects)
-            .filter(|(_, o)| o.joins_words())
-            .map(|((i, _), _)| from + i)
-            .collect();
-        let joins = |i: usize, c: char| c == OBJ && marks.binary_search(&i).is_ok();
+        // Which object a mark is, counted on from the last one asked about (byte offset, objects
+        // before it): `object_at` counts from the paragraph's start each time.
+        let at = std::cell::Cell::new((from, self.objects_before(from)));
+        let joins = |i: usize, c: char| {
+            if c != OBJ {
+                return false;
+            }
+            let (last, k) = at.get();
+            let between = |a: usize, b: usize| self.text.get(a..b).map_or(0, |t| t.matches(OBJ).count());
+            let k = if i >= last { k.saturating_add(between(last, i)) } else { k.saturating_sub(between(i, last)) };
+            at.set((i, k));
+            self.objects.get(k).is_some_and(InlineObject::joins_words)
+        };
         let mut stops = if range.start == 0 { vec![0] } else { Vec::new() };
         let mut off = from;
         loop {
