@@ -192,19 +192,32 @@ pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pag
     }
     for (path, entries) in &b.offsets {
         let para = doc.para(StoryRef::Body, &Path(path.clone()));
+        // The shaping can split a character the caret can't enter (an emoji in two fonts, a
+        // syllable in two styles): a position inside one goes to its start, an end to its end.
+        let stop = |off: usize, end: bool| {
+            para.map_or(off, |p| {
+                if wordcraft_doc::cluster::is_cluster_boundary(&p.text, off) {
+                    off
+                } else if end {
+                    p.next_boundary(off)
+                } else {
+                    p.prev_boundary(off)
+                }
+            })
+        };
         for (i, (off, run, idx)) in entries.iter().enumerate() {
             // Only the run's characters and its end: nothing past what the screen reader was given.
             let Some(len) = b.index.get(run).and_then(|&n| b.tree.nodes.get(n)).map(|(_, n)| n.character_lengths().len()) else { continue };
             if *idx > len {
                 continue;
             }
-            let pos = Pos::new(StoryRef::Body, Path(path.clone()), *off);
+            let pos = Pos::new(StoryRef::Body, Path(path.clone()), stop(*off, false));
             // A later cluster at the same character (after one that shows nothing) wins.
             b.tree.positions.insert((run.accesskit_id(), *idx), pos.clone());
             if *idx < len {
                 // The end of a run is where the next cluster starts, or where its last one ends when
                 // the paragraph goes on past the pages described.
-                let next = entries.get(i + 1).map(|e| e.0).or_else(|| para.map(|p| p.next_boundary(*off))).unwrap_or(*off);
+                let next = entries.get(i + 1).map_or_else(|| para.map_or(*off, |p| p.next_boundary(*off)), |e| stop(e.0, true));
                 b.tree.positions.entry((run.accesskit_id(), idx + 1)).or_insert(Pos { off: next, ..pos });
             }
         }
@@ -830,6 +843,37 @@ mod tests {
         // The first frame of the table preview already shows it, not the document.
         request_selection_over(&mut app, &ctx, doc, (read, 1), (read, 1), Some((2, 2)));
         assert_eq!(sel(&app), (Pos::body(0, 9), Pos::body(0, 9)));
+    }
+
+    /// #4832 review: a syllable in two styles is shaped in two pieces, so a screen reader is given
+    /// a character inside it; the caret, which can't stop there, goes to the syllable's start.
+    #[test]
+    fn a_screen_reader_never_puts_the_caret_inside_a_character() {
+        // "Hi क्ष", escaped: the interface's own text is checked for glyphs it lacks.
+        let mut doc = wordcraft_doc::Document::from_text("Hi \u{915}\u{94d}\u{937}");
+        let p = doc.para_mut(StoryRef::Body, &Path::top(0)).expect("a paragraph");
+        // ष, which the virama before it stacks onto क, in bold.
+        p.format(9, 12, &|c| c.bold = Some(true)).expect("bold");
+        let text = p.text.clone();
+        assert!(!wordcraft_doc::cluster::is_cluster_boundary(&text, 9), "no caret stop inside the syllable");
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let ctx = egui::Context::default();
+        let update = described(&mut app, &ctx);
+        let positions = &app.canvas.a11y.tree.positions;
+        assert!(positions.values().all(|q| wordcraft_doc::cluster::is_cluster_boundary(&text, q.off)), "{positions:?}");
+        let (doc_node, (run, n)) = (
+            update.nodes.iter().find(|(_, n)| n.role() == Role::Document).map(|(id, _)| *id).expect("a document node"),
+            update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == Role::TextRun && n.value().is_some_and(|v| v.starts_with("Hi")))
+                .map(|(id, n)| (*id, n))
+                .expect("the paragraph's run"),
+        );
+        // H, i, space, then the syllable in at least two pieces, and the paragraph mark.
+        assert!(n.character_lengths().len() >= 6, "the shaping splits the syllable: {:?}", n.character_lengths());
+        request_selection(&mut app, &ctx, doc_node, (run, 4), (run, 4));
+        assert_eq!(app.session.sel.focus, Pos::body(0, 3));
     }
 
     /// #4832 review: the end of every run is after its last character, also for the last run
