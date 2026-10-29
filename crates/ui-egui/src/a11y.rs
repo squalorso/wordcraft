@@ -193,6 +193,8 @@ pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pag
     for (path, entries) in &b.offsets {
         let here = Path(path.clone());
         let para = doc.para(StoryRef::Body, &here);
+        // The paragraph right after this one in its container, if the next block is one.
+        let beside = Some(here.with_last(here.last().saturating_add(1))).filter(|q| doc.para(StoryRef::Body, q).is_some());
         // The shaping can split a character the caret can't enter (an emoji in two fonts, a
         // syllable in two styles): a position inside one goes to its start, an end to its end.
         let stop = |off: usize, end: bool| {
@@ -222,11 +224,7 @@ pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pag
                 // not past a table's edge, where the next paragraph is somewhere else.
                 let end = match entries.get(i + 1) {
                     Some(e) => Pos { off: stop(e.0, true), ..pos.clone() },
-                    None => match para
-                        .filter(|p| *off >= p.len())
-                        .and_then(|_| doc.next_para(StoryRef::Body, &here))
-                        .filter(|q| q.parent() == here.parent())
-                    {
+                    None => match para.filter(|p| *off >= p.len()).and(beside.clone()) {
                         Some(q) => Pos::new(StoryRef::Body, q, 0),
                         None => Pos { off: para.map_or(*off, |p| p.next_boundary(*off)), ..pos.clone() },
                     },
