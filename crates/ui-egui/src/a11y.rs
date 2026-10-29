@@ -5,9 +5,11 @@
 //! - the canvas widget is the **document** node (named after the document), holding the caret
 //!   and selection as an AccessKit text selection;
 //! - each body paragraph is a **paragraph**, a **heading** (with its outline level) or a **list
-//!   item** (with its list level, grouped into lists), holding one **text run** per laid-out line
-//!   with its characters' screen positions, so a reader can follow the caret by character, word
-//!   and line and point at text, and a magnifier can keep the caret in view;
+//!   item** (with its list level and alignment, grouped into lists), holding one **text run** per
+//!   laid-out line and formatting (font, size, bold, italic, underline, strikethrough, raised or
+//!   lowered) with its characters' screen positions, so a reader can follow the caret by
+//!   character, word and line, say the formatting and point at text, and a magnifier can keep the
+//!   caret in view;
 //! - tables are **table → row → cell**, pictures and charts **images** named by their alt text,
 //!   hyperlinks **links** around their text runs; list numbers are **list markers**.
 //!
@@ -22,7 +24,8 @@ use std::sync::Arc;
 use egui::accesskit::{self, Node, NodeId, Role, TextPosition, TextSelection};
 use egui::{Id, Rect};
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::TextDirection;
+use wordcraft_doc::props::{Align, Rgb, TextColor, TextDirection, Underline, VertAlign};
+use wordcraft_doc::resolve::ResolvedChar;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_layout::para::{ClKind, Line};
 use wordcraft_layout::{DocLayout, LineEnd, ParaLayout, Placed};
@@ -219,6 +222,8 @@ struct Run {
     /// Paragraph x of each character's left edge and its width (points).
     xs: Vec<(f32, f32)>,
     link: Option<String>,
+    /// The formatting of its characters (they all [`Look`] the same).
+    rc: Option<Arc<ResolvedChar>>,
 }
 
 impl Builder<'_> {
@@ -295,7 +300,7 @@ impl Builder<'_> {
         let block = path.last();
         let heading = para.rp.outline_level.filter(|l| *l < 9);
         let list = para.rp.numbering.filter(|n| n.num != 0 && para.label.is_some());
-        let node = match (heading, list) {
+        let mut node = match (heading, list) {
             (Some(l), _) => {
                 let mut n = Node::new(Role::Heading);
                 n.set_level(l as usize + 1);
@@ -308,6 +313,13 @@ impl Builder<'_> {
             }
             (None, None) => Node::new(Role::Paragraph),
         };
+        // The runs inherit it. As seen on the page: a right-to-left paragraph's start is its right.
+        node.set_text_align(match para.rp.align.visual(para.rp.bidi) {
+            Align::Left => accesskit::TextAlign::Left,
+            Align::Center => accesskit::TextAlign::Center,
+            Align::Right => accesskit::TextAlign::Right,
+            Align::Justify | Align::Distribute => accesskit::TextAlign::Justify,
+        });
         let parent = if list.is_some() && heading.is_none() {
             // Consecutive list paragraphs share a list.
             let lid = match self.lists.get(&container) {
@@ -337,8 +349,8 @@ impl Builder<'_> {
         Some(id)
     }
 
-    /// Lines `lines` of the paragraph at `path`: text runs (split at links, pictures and the
-    /// run length limit), links and pictures.
+    /// Lines `lines` of the paragraph at `path`: text runs (split at links, pictures, formatting
+    /// changes and the run length limit), links and pictures.
     fn paragraph(
         &mut self,
         path: &Path,
@@ -407,13 +419,18 @@ impl Builder<'_> {
                 }
                 self.stop_ahead = false;
                 let link = links.iter().find(|(r, _)| r.contains(&cl.start)).map(|(_, u)| u.clone());
-                if (link != lb.run.link || lb.run.lens.len() >= MAX_RUN) && !lb.run.lens.is_empty() {
+                let rc = para.styles.get(cl.style as usize).map(|s| &s.rc);
+                let restyled = rc.map(|rc| look(rc)) != lb.run.rc.as_deref().map(look);
+                if (link != lb.run.link || restyled || lb.run.lens.len() >= MAX_RUN) && !lb.run.lens.is_empty() {
                     self.flush(&mut lb, line, at);
                     if let Some(m) = lb.map.last_mut() {
                         *m = (cl.start, lb.seg, 0);
                     }
                 }
                 lb.run.link = link;
+                if lb.run.lens.is_empty() {
+                    lb.run.rc = rc.cloned();
+                }
                 // A line break ends its line as the paragraph mark does, and takes the same room.
                 let (x, w) = if cl.kind == ClKind::LineBreak {
                     line.mark_box()
@@ -480,6 +497,9 @@ impl Builder<'_> {
         n.set_word_starts(starts);
         n.set_value(run.text);
         n.set_character_lengths(run.lens.clone());
+        if let Some(rc) = &run.rc {
+            look(rc).describe(&mut n);
+        }
         if let Some((pseg, _)) = lb.prev {
             let pid = lb.pid.with(("run", lb.li, pseg));
             n.set_previous_on_line(pid.accesskit_id());
@@ -542,6 +562,77 @@ fn push_char(run: &mut Run, text: &str, x: f32, w: f32) {
     run.lens.push(len);
     let (x, w) = (if x.is_finite() { x } else { 0.0 }, if w.is_finite() { w } else { 0.0 });
     run.xs.push((x, w));
+}
+
+/// What a screen reader says of a run's formatting (NVDA+F, JAWS Insert+F): the font name and
+/// size the document asks for, as Word reports them, not the face drawn in their place.
+#[derive(PartialEq)]
+struct Look<'a> {
+    font: &'a str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    underline: Option<accesskit::TextDecoration>,
+    strike: Option<accesskit::TextDecoration>,
+    raised: Option<accesskit::VerticalOffset>,
+}
+
+fn look(rc: &ResolvedChar) -> Look<'_> {
+    use accesskit::TextDecorationStyle as S;
+    // Automatic colour is black on the page.
+    let ink = |c: Option<Rgb>| {
+        let Rgb(red, green, blue) = c.unwrap_or(Rgb(0, 0, 0));
+        accesskit::Color { red, green, blue, alpha: 255 }
+    };
+    let text = match rc.color {
+        TextColor::Rgb(c) => Some(c),
+        TextColor::Auto => None,
+    };
+    let underline = match rc.underline {
+        Underline::None => None,
+        Underline::Single | Underline::Words | Underline::Thick => Some(S::Solid),
+        Underline::Double => Some(S::Double),
+        Underline::Dotted => Some(S::Dotted),
+        Underline::Dash | Underline::DotDash | Underline::DotDotDash => Some(S::Dashed),
+        Underline::Wave | Underline::DoubleWave => Some(S::Wavy),
+    };
+    let strike = if rc.double_strike { Some(S::Double) } else { rc.strike.then_some(S::Solid) };
+    Look {
+        font: &rc.font,
+        size: rc.size,
+        bold: rc.bold,
+        italic: rc.italic,
+        underline: underline.map(|style| accesskit::TextDecoration { style, color: ink(rc.underline_color.or(text)) }),
+        strike: strike.map(|style| accesskit::TextDecoration { style, color: ink(text) }),
+        raised: match rc.vert_align {
+            VertAlign::Baseline => None,
+            VertAlign::Superscript => Some(accesskit::VerticalOffset::Superscript),
+            VertAlign::Subscript => Some(accesskit::VerticalOffset::Subscript),
+        },
+    }
+}
+
+impl Look<'_> {
+    fn describe(&self, n: &mut Node) {
+        n.set_font_family(self.font);
+        // Points, though AccessKit's schema says pixels: every adapter hands the number to the
+        // platform as it is, and UI Automation, AT-SPI and macOS read points, so pixels would
+        // make NVDA say "16 pt" for 12-point text.
+        n.set_font_size(self.size);
+        n.set_font_weight(if self.bold { 700.0 } else { 400.0 });
+        if self.italic {
+            n.set_italic();
+        }
+        if let Some(d) = self.underline {
+            n.set_underline(d);
+        }
+        if let Some(d) = self.strike {
+            n.set_strikethrough(d);
+        }
+        if let Some(o) = self.raised {
+            n.set_vertical_offset(o);
+        }
+    }
 }
 
 /// The paragraph's hyperlinked byte ranges and their targets.
@@ -840,6 +931,61 @@ mod tests {
         let run = nodes[&s.focus.node];
         assert_eq!(run.role(), Role::TextRun);
         assert_eq!(run.value(), Some("Read this "));
+    }
+
+    /// NVDA+F and JAWS Insert+F say the formatting at the caret from its text run: a change of
+    /// font, size, bold, italic, underline, strikethrough or raised text starts a run, words still
+    /// start where Ctrl+Right stops, and the paragraph gives its alignment.
+    #[test]
+    fn text_runs_carry_the_formatting() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for (cmd, p) in [
+            ("text.insert", json!({"text": "Plain bold italic under struck high big"})),
+            ("para.alignCenter", json!({})),
+            ("select.text", json!({"text": "bold"})),
+            ("format.bold", json!({})),
+            ("select.text", json!({"text": "italic"})),
+            ("format.italic", json!({})),
+            ("select.text", json!({"text": "under"})),
+            ("format.underline", json!({})),
+            ("select.text", json!({"text": "struck"})),
+            ("format.strikethrough", json!({})),
+            ("select.text", json!({"text": "high"})),
+            ("format.superscript", json!({})),
+            ("select.text", json!({"text": "big"})),
+            ("format.size", json!({"size": 20})),
+            ("format.font", json!({"name": "Georgia"})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let update = described(&mut app, &egui::Context::default());
+        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
+        let para = nodes.values().find(|n| n.role() == Role::Paragraph).expect("the paragraph");
+        // The paragraph's runs in order (the ribbon's boxes have text runs too).
+        let runs: Vec<&Node> = para.children().iter().filter_map(|c| nodes.get(c).copied()).filter(|n| n.role() == Role::TextRun).collect();
+        let values: Vec<&str> = runs.iter().map(|n| n.value().unwrap_or("")).collect();
+        assert_eq!(values, ["Plain ", "bold", " ", "italic", " ", "under", " ", "struck", " ", "high", " ", "big\n"]);
+        let run = |v: &str| runs[values.iter().position(|x| *x == v).unwrap()];
+
+        let plain = run("Plain ");
+        assert!(plain.font_family().is_some_and(|f| !f.is_empty()));
+        assert!(plain.font_size().is_some_and(|s| s < 20.0), "{:?}", plain.font_size());
+        assert_eq!(plain.font_weight(), Some(400.0));
+        assert!(!plain.is_italic());
+        assert_eq!((plain.underline(), plain.strikethrough(), plain.vertical_offset()), (None, None, None));
+
+        assert_eq!(run("bold").font_weight(), Some(700.0));
+        // A formatting change inside the line doesn't merge the words around it.
+        assert_eq!(run("bold").word_starts(), [0]);
+        assert!(run("italic").is_italic());
+        assert_eq!(run("under").underline().map(|d| d.style), Some(accesskit::TextDecorationStyle::Solid));
+        assert_eq!(run("struck").strikethrough().map(|d| d.style), Some(accesskit::TextDecorationStyle::Solid));
+        assert_eq!(run("high").vertical_offset(), Some(accesskit::VerticalOffset::Superscript));
+        // Size in points, as the platforms read it.
+        let big = run("big\n");
+        assert_eq!((big.font_family(), big.font_size()), (Some("Georgia"), Some(20.0)));
+        assert_eq!(run(" ").font_size(), plain.font_size());
+        assert_eq!(para.text_align(), Some(accesskit::TextAlign::Center));
     }
 
     /// #1119: a magnifier keeps the caret in view by the box of the character after it (Windows
