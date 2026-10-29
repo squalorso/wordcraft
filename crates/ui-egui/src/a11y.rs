@@ -191,7 +191,8 @@ pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pag
         }
     }
     for (path, entries) in &b.offsets {
-        let para = doc.para(StoryRef::Body, &Path(path.clone()));
+        let here = Path(path.clone());
+        let para = doc.para(StoryRef::Body, &here);
         // The shaping can split a character the caret can't enter (an emoji in two fonts, a
         // syllable in two styles): a position inside one goes to its start, an end to its end.
         let stop = |off: usize, end: bool| {
@@ -211,14 +212,26 @@ pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pag
             if *idx > len {
                 continue;
             }
-            let pos = Pos::new(StoryRef::Body, Path(path.clone()), stop(*off, false));
+            let pos = Pos::new(StoryRef::Body, here.clone(), stop(*off, false));
             // A later cluster at the same character (after one that shows nothing) wins.
             b.tree.positions.insert((run.accesskit_id(), *idx), pos.clone());
             if *idx < len {
                 // The end of a run is where the next cluster starts, or where its last one ends when
-                // the paragraph goes on past the pages described.
-                let next = entries.get(i + 1).map_or_else(|| para.map_or(*off, |p| p.next_boundary(*off)), |e| stop(e.0, true));
-                b.tree.positions.entry((run.accesskit_id(), idx + 1)).or_insert(Pos { off: next, ..pos });
+                // the paragraph goes on past the pages described. After the paragraph mark it is the
+                // next paragraph's start, as AccessKit has it, so a selection to there takes the mark;
+                // not past a table's edge, where the next paragraph is somewhere else.
+                let end = match entries.get(i + 1) {
+                    Some(e) => Pos { off: stop(e.0, true), ..pos.clone() },
+                    None => match para
+                        .filter(|p| *off >= p.len())
+                        .and_then(|_| doc.next_para(StoryRef::Body, &here))
+                        .filter(|q| q.parent() == here.parent())
+                    {
+                        Some(q) => Pos::new(StoryRef::Body, q, 0),
+                        None => Pos { off: para.map_or(*off, |p| p.next_boundary(*off)), ..pos.clone() },
+                    },
+                };
+                b.tree.positions.entry((run.accesskit_id(), idx + 1)).or_insert(end);
             }
         }
     }
@@ -773,6 +786,12 @@ mod tests {
         // From "this" to the second paragraph's "Sec", across the link.
         request_selection(&mut app, &ctx, doc, (read, 5), (second, 3));
         assert_eq!(sel(&app), (Pos::body(0, 5), Pos::body(1, 3)));
+        // The first paragraph, to the end of its last run: past its mark, at the next one's start.
+        request_selection(&mut app, &ctx, doc, (read, 0), (run(", then stop.\n"), 13));
+        assert_eq!(sel(&app), (Pos::body(0, 0), Pos::body(1, 0)));
+        // The last paragraph's end stays its end.
+        request_selection(&mut app, &ctx, doc, (second, 7), (second, 7));
+        assert_eq!(sel(&app), (Pos::body(1, 6), Pos::body(1, 6)));
         // The end of a run is where the next one starts.
         request_selection(&mut app, &ctx, doc, (read, 10), (read, 10));
         assert_eq!(sel(&app), (Pos::body(0, 10), Pos::body(0, 10)));
@@ -809,11 +828,7 @@ mod tests {
                 .map(|(id, _)| *id)
                 .unwrap_or_else(|| panic!("no run {text:?}"))
         };
-        let (read, a) = (
-            run("Read this
-"),
-            run("A"),
-        );
+        let (read, a) = (run("Read this\n"), run("A"));
         let sel = |app: &crate::WordApp| (app.session.sel.anchor.clone(), app.session.sel.focus.clone());
 
         // Past the end of "A", which the bookmark and the link follow.
@@ -826,18 +841,7 @@ mod tests {
         request_selection(&mut app, &ctx, doc, (read, 5), (read, 5));
         assert_eq!(sel(&app), (Pos::body(0, 4), Pos::body(0, 4)), "the request waits");
         // The tree of the current text takes it.
-        let read = described(&mut app, &ctx)
-            .nodes
-            .iter()
-            .find(|(_, n)| {
-                n.value()
-                    == Some(
-                        "Now Read this
-",
-                    )
-            })
-            .map(|(id, _)| *id)
-            .expect("the run");
+        let read = described(&mut app, &ctx).nodes.iter().find(|(_, n)| n.value() == Some("Now Read this\n")).map(|(id, _)| *id).expect("the run");
         request_selection(&mut app, &ctx, doc, (read, 9), (read, 9));
         assert_eq!(sel(&app), (Pos::body(0, 9), Pos::body(0, 9)));
         // The first frame of the table preview already shows it, not the document.
