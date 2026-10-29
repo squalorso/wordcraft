@@ -136,8 +136,16 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
 
 /// Build the description of pages `pages.0..pages.1`.
 pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pages: (usize, usize), sel: (&Pos, &Pos)) -> Tree {
-    let mut b =
-        Builder { doc, doc_id, tree: Tree::default(), index: HashMap::new(), lists: HashMap::new(), offsets: HashMap::new(), word_stops: Vec::new() };
+    let mut b = Builder {
+        doc,
+        doc_id,
+        tree: Tree::default(),
+        index: HashMap::new(),
+        lists: HashMap::new(),
+        offsets: HashMap::new(),
+        word_stops: Vec::new(),
+        stop_ahead: false,
+    };
     for pi in pages.0..pages.1 {
         let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { continue };
         let scale = crate::canvas::page_screen_scale(*pr, page, 1.0);
@@ -199,6 +207,8 @@ struct Builder<'a> {
     /// The byte offsets where Ctrl+Right stops in the lines being described, in order: the starts
     /// of their words, as the caret sees them.
     word_stops: Vec<usize>,
+    /// A word stop fell on a cluster not shown; the next character shown starts the word.
+    stop_ahead: bool,
 }
 
 /// One text run being gathered.
@@ -343,6 +353,7 @@ impl Builder<'_> {
         let span =
             para.lines.get(lines.start).map_or(0, |l| l.start)..lines.end.checked_sub(1).and_then(|li| para.lines.get(li)).map_or(0, |l| l.stop);
         self.word_stops = dp.word_stops(span);
+        self.stop_ahead = false;
         let first_top = para.lines.get(lines.start).map_or(0.0, |l| l.top);
         for li in lines {
             let Some(line) = para.lines.get(li) else { break };
@@ -350,10 +361,12 @@ impl Builder<'_> {
                 // A repeated table header row shows the same lines again.
                 continue;
             }
-            let mut lb = LineBuild { pid, li, seg: 0, prev: None, top: line.top - first_top, run: Run::default(), map: Vec::new() };
+            let mut lb =
+                LineBuild { pid, li, seg: 0, prev: None, top: line.top - first_top, run: Run::default(), map: Vec::new(), starts: Vec::new() };
             for k in line.c0..line.c1 {
                 let Some(cl) = para.clusters.get(k) else { break };
                 lb.map.push((cl.start, lb.seg, lb.run.lens.len()));
+                let stop = self.stop_ahead || self.word_stops.binary_search(&cl.start).is_ok();
                 let shown = para.shown.binary_search_by_key(&k, |s| s.0).ok().and_then(|i| para.shown.get(i)).map(|s| s.1.as_str());
                 let text = match (cl.kind, shown) {
                     (_, Some(s)) => s,
@@ -387,8 +400,12 @@ impl Builder<'_> {
                     (ClKind::PageBreak | ClKind::ColumnBreak | ClKind::Marker, None) => "",
                 };
                 if text.is_empty() {
+                    // A word that starts at something not shown (a bookmark before a link, a page
+                    // break) starts at the next character shown, maybe in the next run or line.
+                    self.stop_ahead = stop;
                     continue;
                 }
+                self.stop_ahead = false;
                 let link = links.iter().find(|(r, _)| r.contains(&cl.start)).map(|(_, u)| u.clone());
                 if (link != lb.run.link || lb.run.lens.len() >= MAX_RUN) && !lb.run.lens.is_empty() {
                     self.flush(&mut lb, line, at);
@@ -404,6 +421,9 @@ impl Builder<'_> {
                     let (x0, x1) = (line.cl_left(k).unwrap_or(0.0), line.cl_right(k).unwrap_or(0.0));
                     (x0.min(x1), (x1 - x0).abs())
                 };
+                if stop {
+                    lb.starts.push((lb.seg, lb.run.lens.len()));
+                }
                 push_char(&mut lb.run, text, x, w);
             }
             if line.end == LineEnd::Para {
@@ -453,18 +473,10 @@ impl Builder<'_> {
             n.set_character_positions(run.xs.iter().map(|c| (c.0 - x0) * at.scale).collect::<Vec<f32>>());
             n.set_character_widths(run.xs.iter().map(|c| c.1 * at.scale).collect::<Vec<f32>>());
         }
-        // The words a screen reader moves by are the caret's: the clusters of this run where
+        // The words a screen reader moves by are the caret's: the characters of this run where
         // Ctrl+Right stops, its first one included when a word starts there (a wrapped line, a
         // link), as AccessKit expects.
-        // A stop at a mark that shows nothing (a page break, a content control's edge) starts the
-        // same character as the stop after it.
-        let mut starts: Vec<u8> = lb
-            .map
-            .iter()
-            .filter(|(off, seg, idx)| *seg == lb.seg && *idx < run.lens.len() && self.word_stops.binary_search(off).is_ok())
-            .filter_map(|(_, _, idx)| u8::try_from(*idx).ok())
-            .collect();
-        starts.dedup();
+        let starts: Vec<u8> = lb.starts.iter().filter(|(seg, _)| *seg == lb.seg).filter_map(|(_, idx)| u8::try_from(*idx).ok()).collect();
         n.set_word_starts(starts);
         n.set_value(run.text);
         n.set_character_lengths(run.lens.clone());
@@ -515,6 +527,8 @@ struct LineBuild {
     run: Run,
     /// (byte offset, segment, character index) of each cluster.
     map: Vec<(usize, usize, usize)>,
+    /// (segment, character index) of each character where a word starts.
+    starts: Vec<(usize, usize)>,
 }
 
 fn push_char(run: &mut Run, text: &str, x: f32, w: f32) {
@@ -685,6 +699,38 @@ mod tests {
         let update = described(&mut app, &egui::Context::default());
         let run = update.nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::TextRun && n.value() == Some("Bookmarked words\n"));
         assert_eq!(run.map(Node::word_starts), Some(&[0, 11][..]));
+    }
+
+    /// #3173 review: Ctrl+Right stops before a bookmark that leads into a word, and the bookmark
+    /// shows nothing, so the word's start goes to its first character: a link right after a
+    /// bookmark, and a wrapped line after one, still start a word.
+    #[test]
+    fn a_word_after_a_bookmark_starts_its_run() {
+        let mut doc = wordcraft_doc::Document::from_text(&"wrapping ".repeat(60));
+        let p = doc.para_mut(StoryRef::Body, &Path::top(0)).expect("a paragraph");
+        for i in (1..60).rev() {
+            p.insert_object(9 * i, InlineObject::BookmarkStart { name: format!("b{i}") }, &Default::default()).expect("a bookmark");
+        }
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        for (cmd, p) in [
+            ("caret.docEnd", json!({})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "Read this "})),
+            ("insert.bookmark", json!({"name": "Before"})),
+            ("caret.end", json!({})),
+            ("insert.link", json!({"url": "https://example.com", "text": "link"})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let second = app.session.doc.para(StoryRef::Body, &Path::top(1)).map(|p| p.text.clone());
+        assert_eq!(second.as_deref(), Some("Read this \u{FFFC}\u{FFFC}link"));
+        let update = described(&mut app, &egui::Context::default());
+        let runs: Vec<&Node> = update.nodes.iter().map(|(_, n)| n).filter(|n| n.role() == Role::TextRun).collect();
+        let link = runs.iter().find(|n| n.value() == Some("link"));
+        assert_eq!(link.map(|n| n.word_starts()), Some(&[0][..]));
+        let wrapped: Vec<&&Node> = runs.iter().filter(|n| n.value().is_some_and(|v| v.starts_with("wrapping"))).collect();
+        assert!(wrapped.len() > 1, "the paragraph wraps");
+        assert!(wrapped.iter().all(|n| n.word_starts().first() == Some(&0)), "a line's first word");
     }
 
     /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
