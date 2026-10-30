@@ -2567,9 +2567,13 @@ fn the_context_menu_from_the_keyboard_enters_its_submenus() {
         assert_eq!(focused(h).as_deref(), Some("Insert"), "Down reaches the Insert submenu's item");
     };
     let submenu_open = |h: &H| h.query_by_role_and_label(Role::MenuItem, "Insert Columns to the Left ").is_some();
+    // To a screen reader the item has a submenu, collapsed or expanded ("Insert, collapsed").
+    let expanded = |h: &H| h.get_by_role_and_label(Role::MenuItem, "Insert").accesskit_node().data().is_expanded();
     to_insert(&mut h);
+    assert_eq!(expanded(&h), Some(false), "the submenu's item says it is collapsed");
     key(&mut h, egui::Key::ArrowRight);
     assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Left "), "Right goes into the submenu");
+    assert_eq!(expanded(&h), Some(true), "and its item that it is expanded");
     key(&mut h, egui::Key::ArrowDown);
     assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Right "), "Down moves in the submenu");
     key(&mut h, egui::Key::ArrowLeft);
@@ -2580,6 +2584,7 @@ fn the_context_menu_from_the_keyboard_enters_its_submenus() {
     assert!(h.state().canvas.context_menu_open, "Escape in the submenu leaves the menu open");
     assert!(!submenu_open(&h), "and closes the submenu");
     assert_eq!(focused(&h).as_deref(), Some("Insert"), "its item has the keyboard");
+    assert_eq!(expanded(&h), Some(false), "collapsed again");
     key(&mut h, egui::Key::Escape);
     assert!(!h.state().canvas.context_menu_open, "a second Escape closes the menu");
     assert!(h.state().canvas.focused, "and the page has the keyboard again");

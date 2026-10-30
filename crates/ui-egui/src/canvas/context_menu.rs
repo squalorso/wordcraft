@@ -21,6 +21,17 @@ fn menu_choice(app: &mut WordApp, resp: &egui::Response, name: &str, checked: bo
     app.canvas.context_menu_items.push((resp.layer_id, resp.id, resp.enabled()));
 }
 
+/// The item that opens a submenu: a menu item that has one, collapsed or expanded, which screen
+/// readers say ("Insert, collapsed") as in Word's menus.
+fn submenu_item(app: &mut WordApp, ui: &Ui, trigger: &egui::InnerResponse<Option<()>>, name: &str) {
+    menu_item(app, &trigger.response, name);
+    let open = trigger.inner.is_some();
+    ui.ctx().accesskit_node_builder(trigger.response.id, |n| {
+        n.set_has_popup(egui::accesskit::HasPopup::Menu);
+        n.set_expanded(open);
+    });
+}
+
 /// Each item's place in the menu (or submenu) `ui` draws, and the number of its items, which
 /// screen readers say ("2 of 9") as in Word's menus; items that are off count too. The number
 /// goes on the menu: UI Automation takes it from the item's container.
@@ -213,7 +224,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             }
             number_items(ui, &app.canvas.context_menu_items);
         });
-        menu_item(app, &trigger.response, tl!("Synonyms"));
+        submenu_item(app, ui, &trigger, tl!("Synonyms"));
     }
     item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
@@ -268,7 +279,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             }
             number_items(ui, &app.canvas.context_menu_items);
         });
-        menu_item(app, &trigger.response, tl!("Wrap Text"));
+        submenu_item(app, ui, &trigger, tl!("Wrap Text"));
     }
     if crate::widgets::enabled(app, "shape.fill") {
         item(ui, app, "Format Shape…", "view.formatShapePane", json!({"value": true}));
@@ -284,7 +295,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
             number_items(ui, &app.canvas.context_menu_items);
         });
-        menu_item(app, &trigger.response, tl!("Insert"));
+        submenu_item(app, ui, &trigger, tl!("Insert"));
         // Every Delete is there whatever is selected, as on Word's Delete button: with the caret
         // in a cell, Delete Table is how the table goes (#1198).
         let trigger = ui.menu_button(tl!("Delete"), |ui| {
@@ -294,7 +305,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
             number_items(ui, &app.canvas.context_menu_items);
         });
-        menu_item(app, &trigger.response, tl!("Delete"));
+        submenu_item(app, ui, &trigger, tl!("Delete"));
         if pick == TablePick::Cell {
             item(ui, app, "Split Cells", "table.split", json!({}));
         }
@@ -312,7 +323,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                 item(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
                 number_items(ui, &app.canvas.context_menu_items);
             });
-            menu_item(app, &trigger.response, tl!("AutoFit"));
+            submenu_item(app, ui, &trigger, tl!("AutoFit"));
         }
         item(ui, app, "Text Direction", "table.textDirection", json!({}));
         if pick == TablePick::Table {
