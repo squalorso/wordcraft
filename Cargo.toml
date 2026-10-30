@@ -143,7 +143,7 @@ winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457
 # a `text_document` node property and its UI Automation text pattern (squalorso/accesskit,
 # branch `text-document`, at the release above: 0.25.1, consumer 0.39.1, windows 0.35.1). See its
 # PATCHES.md.
-accesskit = { git = "https://github.com/squalorso/accesskit.git", rev = "d46befa862d18c4f79bc772eff9927e165a2066a" }
-accesskit_consumer = { git = "https://github.com/squalorso/accesskit.git", rev = "d46befa862d18c4f79bc772eff9927e165a2066a" }
-accesskit_windows = { git = "https://github.com/squalorso/accesskit.git", rev = "d46befa862d18c4f79bc772eff9927e165a2066a" }
-accesskit_winit = { git = "https://github.com/squalorso/accesskit.git", rev = "d46befa862d18c4f79bc772eff9927e165a2066a" }
+accesskit = { git = "https://github.com/squalorso/accesskit.git", rev = "a98a56b6ba6ea43b508b56d5ccfdda6428159a58" }
+accesskit_consumer = { git = "https://github.com/squalorso/accesskit.git", rev = "a98a56b6ba6ea43b508b56d5ccfdda6428159a58" }
+accesskit_windows = { git = "https://github.com/squalorso/accesskit.git", rev = "a98a56b6ba6ea43b508b56d5ccfdda6428159a58" }
+accesskit_winit = { git = "https://github.com/squalorso/accesskit.git", rev = "a98a56b6ba6ea43b508b56d5ccfdda6428159a58" }
