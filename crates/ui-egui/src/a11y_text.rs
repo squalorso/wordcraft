@@ -21,10 +21,13 @@ use std::sync::Arc;
 use egui::accesskit::text_document::{Align, Annotation, LineBox, LineStyle, Look, Object, ObjectKind, ParaKind};
 use egui::accesskit::{self, Role, TextDocument, TextDocumentRef, TextPosition, TextSelection};
 use egui::{Id, Rect};
-use wordcraft_doc::props::{Align as DocAlign, Underline, VertAlign};
+use wordcraft_doc::props::{Align as DocAlign, LineSpacing, Rgb, Underline, VertAlign};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Block, Blocks, Document, Path, Pos, StoryRef};
+use wordcraft_geom::Unit;
+use wordcraft_layout::display::text_color;
 use wordcraft_layout::{DocLayout, ParaLayout, Placed};
+use wordcraft_render::RenderOptions;
 
 /// UI Automation's paragraph style ids (`StyleId_*`): Heading 1 to 9 follow `HEADING_1`.
 const STYLE_OTHER: i32 = 70000;
@@ -44,8 +47,20 @@ pub struct TextCache {
     /// The session's revision it was built at: positions from an older text are not the
     /// document's.
     rev: u64,
+    /// The view it was built for: its words and colours change with it, not with the layout.
+    shown: Option<Shown>,
     text: Option<TextDocumentRef>,
     map: Map,
+}
+
+/// What the text takes from the view rather than the layout: the interface language (style
+/// names), the region's decimal separator (line spacing), and how the page is painted (colours).
+#[derive(Clone, Copy, PartialEq)]
+struct Shown {
+    lang: &'static str,
+    decimal: char,
+    dark: bool,
+    paper: Rgb,
 }
 
 /// Describe the document under the canvas widget `doc_id` to AccessKit as one text for this
@@ -80,10 +95,18 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
         let _ = app.run("select.range", serde_json::json!({"anchor": anchor, "focus": focus}));
     }
     let preview = crate::canvas::preview_sel(app).is_some();
+    let opts = crate::canvas::page_render_options(app, false);
+    let shown = Shown {
+        lang: crate::i18n::current().code(),
+        decimal: crate::options::decimal(),
+        dark: opts.dark,
+        paper: opts.paper_of(crate::canvas::page_doc(app)),
+    };
     let cache = &app.canvas.a11y.text;
-    if !cache.layout.as_ref().is_some_and(|l| Arc::ptr_eq(l, layout)) || cache.previewing != preview {
-        let (text, map) = build(crate::canvas::page_doc(app), layout);
-        app.canvas.a11y.text = TextCache { layout: Some(layout.clone()), previewing: preview, rev: app.session.rev(), text: Some(text.into()), map };
+    if !cache.layout.as_ref().is_some_and(|l| Arc::ptr_eq(l, layout)) || cache.previewing != preview || cache.shown != Some(shown) {
+        let (text, map) = build(crate::canvas::page_doc(app), layout, &opts);
+        app.canvas.a11y.text =
+            TextCache { layout: Some(layout.clone()), previewing: preview, rev: app.session.rev(), shown: Some(shown), text: Some(text.into()), map };
     }
     let sel = crate::canvas::preview_sel(app).unwrap_or(&app.session.sel);
     let cache = &app.canvas.a11y.text;
@@ -165,10 +188,12 @@ impl Map {
 }
 
 /// The document as one text: paragraphs in reading order (table cells included), each ended by
-/// `\r`, with their lines (and where they sit on their pages), pages, words, formatting and
-/// spelling errors, and the links, lists and tables in it as elements.
-pub fn build(doc: &Document, layout: &DocLayout) -> (TextDocument, Map) {
-    let mut b = Build { doc, layout, s: TextDocument::default(), last_look: None, pages: Vec::new(), map: Map::default() };
+/// `\r`, with their lines (and where they sit on their pages), pages, words, formatting (its
+/// colours as `opts` paints them) and spelling errors, and the links, lists and tables in it as
+/// elements.
+pub fn build(doc: &Document, layout: &DocLayout, opts: &RenderOptions) -> (TextDocument, Map) {
+    let paper = opts.paper_of(doc);
+    let mut b = Build { doc, layout, opts, paper, s: TextDocument::default(), last_look: None, pages: Vec::new(), map: Map::default() };
     b.s.objects = b.blocks(&doc.body, &[]);
     let Build { mut s, mut pages, mut map, .. } = b;
     // A page starts at the first text placed on it.
@@ -185,6 +210,9 @@ pub fn build(doc: &Document, layout: &DocLayout) -> (TextDocument, Map) {
 struct Build<'a> {
     doc: &'a Document,
     layout: &'a DocLayout,
+    opts: &'a RenderOptions,
+    /// The paper under the text, on screen.
+    paper: Rgb,
     s: TextDocument,
     last_look: Option<Look>,
     /// (page, where its first text starts).
@@ -274,7 +302,12 @@ impl Build<'_> {
         s.text.push(u16::from(b'\r'));
         let k = match pl {
             Some(pl) => kind(doc, &pl.rp, label.as_deref()),
-            None => ParaKind { style_id: STYLE_NORMAL, style_name: "Normal".into(), align: Align::Left },
+            None => ParaKind {
+                style_id: STYLE_NORMAL,
+                style_name: crate::i18n::builtin_style_name("Normal"),
+                align: Align::Left,
+                line_spacing: line_spacing(LineSpacing::default()),
+            },
         };
         s.paragraphs.push((start, k));
         for (pg, para, l0, l1, x, y) in &pieces {
@@ -310,7 +343,7 @@ impl Build<'_> {
         if let Some(pl) = pl {
             for cl in &pl.clusters {
                 let Some(st) = pl.styles.get(cl.style as usize) else { continue };
-                let l = look(&st.rc);
+                let l = look(&st.rc, self.opts, self.paper);
                 if self.last_look.as_ref() != Some(&l) {
                     s.looks.push((at(cl.start), l.clone()));
                     self.last_look = Some(l);
@@ -353,8 +386,14 @@ fn utf16_offsets(s: &str) -> Vec<usize> {
     out
 }
 
-/// How a run looks, as UI Automation's text attributes say it.
-fn look(rc: &ResolvedChar) -> Look {
+/// How a run looks, as UI Automation's text attributes say it. Its colours are those on screen, as
+/// Word's are: automatic text black (white on a dark highlight or shading), on its highlight or
+/// shading or else the paper, all as a dark page turns them.
+fn look(rc: &ResolvedChar, opts: &RenderOptions, paper: Rgb) -> Look {
+    let behind = rc.shading.or(rc.highlight);
+    let color = opts.ink_text(text_color(&rc.color, behind), behind);
+    let background = behind.map_or(paper, |b| opts.ink_bg(b));
+    let rgb = |c: Rgb| accesskit::Color { red: c.0, green: c.1, blue: c.2, alpha: 255 };
     Look {
         font: rc.font.clone(),
         size: rc.size,
@@ -371,11 +410,27 @@ fn look(rc: &ResolvedChar) -> Look {
         strike: if rc.double_strike { Some(LineStyle::Double) } else { rc.strike.then_some(LineStyle::Single) },
         superscript: rc.vert_align == VertAlign::Superscript,
         subscript: rc.vert_align == VertAlign::Subscript,
+        color: Some(rgb(color)),
+        background: Some(rgb(background)),
+    }
+}
+
+/// A paragraph's line spacing as WordCraft shows it: a multiple as the Line Spacing menu and the
+/// Paragraph dialog do (`1.15`, with the region's decimal separator), points as a table row's
+/// height does (`At least 12 pt`).
+fn line_spacing(spacing: LineSpacing) -> String {
+    let points = |pt: f32| crate::options::length_in(Unit::Points, pt);
+    match spacing {
+        // A multiple written as points are: two decimals at most, trailing zeros dropped.
+        LineSpacing::Multiple(m) => Unit::Points.number(m, crate::options::decimal()),
+        LineSpacing::AtLeast(pt) => format!("{} {}", tl!("At least"), points(pt)),
+        LineSpacing::Exactly(pt) => format!("{} {}", tl!("Exactly"), points(pt)),
     }
 }
 
 /// What a paragraph is: a heading by its outline level, a bulleted or numbered list item by its
-/// label, otherwise its style; with the style's name and the alignment seen on the page.
+/// label, otherwise its style; with the style's name as the interface shows it, the alignment seen
+/// on the page and the line spacing.
 fn kind(doc: &Document, rp: &ResolvedPara, label: Option<&str>) -> ParaKind {
     let style_id = match (rp.outline_level.filter(|l| *l < 9), rp.numbering.filter(|n| n.num != 0).and(label)) {
         (Some(l), _) => STYLE_HEADING_1 + i32::from(l),
@@ -390,13 +445,14 @@ fn kind(doc: &Document, rp: &ResolvedPara, label: Option<&str>) -> ParaKind {
     };
     ParaKind {
         style_id,
-        style_name: doc.styles.get(&rp.style).map_or_else(|| rp.style.clone(), |s| s.name.clone()),
+        style_name: doc.styles.get(&rp.style).map_or_else(|| rp.style.clone(), crate::i18n::style_name),
         align: match rp.align.visual(rp.bidi) {
             DocAlign::Left => Align::Left,
             DocAlign::Center => Align::Center,
             DocAlign::Right => Align::Right,
             DocAlign::Justify | DocAlign::Distribute => Align::Justify,
         },
+        line_spacing: line_spacing(rp.line_spacing),
     }
 }
 
@@ -600,6 +656,58 @@ mod tests {
         assert_eq!(String::from_utf16_lossy(doc.text.get(c1.range.clone()).unwrap_or_default()), "C1\r");
         let (anchor, _) = app.canvas.a11y.text.map.selection(c1.range.start, c1.range.start).expect("a position");
         assert_eq!(anchor.path, Path(vec![1, 0, 1, 0]));
+    }
+
+    /// What NVDA+F reads: the style's name as the interface shows it, the line spacing as the
+    /// Line Spacing menu writes it, and the colours on screen, which a dark page turns.
+    #[test]
+    fn formatting_reads_as_the_interface_and_the_screen_show_it() {
+        let mut app = sample();
+        app.run("select.text", json!({"text": "Read"})).unwrap();
+        app.run("para.lineSpacing", json!({"value": 1.15})).unwrap();
+        app.run("format.color", json!({"color": "C00000"})).unwrap();
+        app.run("select.text", json!({"text": "Title here"})).unwrap();
+        app.run("para.lineSpacing", json!({"atLeast": 14})).unwrap();
+        app.run("select.text", json!({"text": "this"})).unwrap();
+        app.run("format.highlight", json!({"color": "yellow"})).unwrap();
+        let ctx = egui::Context::default();
+        let (_, node) = document(&mut app, &ctx);
+        let doc = node.text_document().expect("the document as text");
+        let para = |i: usize| doc.paragraphs.get(i).map(|p| p.1.clone()).expect("a paragraph");
+        assert_eq!((para(0).style_name.as_str(), para(0).line_spacing.as_str()), ("Heading 1", "At least 14 pt"));
+        assert_eq!((para(1).style_name.as_str(), para(1).line_spacing.as_str()), ("Normal", "1.15"));
+        // In another interface language, the interface's names (the app sets its own language
+        // each frame, so the text is built here directly).
+        crate::i18n::set_current(crate::i18n::fixture_lang(
+            "x-fixture",
+            "\tNormal\tNormal-FX\n\tHeading {n}\tHeading-FX {n}\n\tAt least\tAt-least-FX\n",
+        ));
+        let layout = app.session.layout();
+        let (built, _) = build(&app.session.doc, &layout, &crate::canvas::page_render_options(&app, false));
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let names: Vec<(&str, &str)> = built.paragraphs.iter().take(2).map(|p| (p.1.style_name.as_str(), p.1.line_spacing.as_str())).collect();
+        assert_eq!(names, [("Heading-FX 1", "At-least-FX 14 pt"), ("Normal-FX", "1.15")]);
+        let rgb = |red, green, blue| Some(accesskit::Color { red, green, blue, alpha: 255 });
+        let look = |off: usize| doc.looks.iter().rev().find(|l| l.0 <= off).map(|l| l.1.clone()).expect("a look");
+        // "Read this link\r" starts at 11: "Read" red on the paper, "this" on its highlight.
+        assert_eq!((look(11).color, look(11).background), (rgb(0xC0, 0, 0), rgb(0xFF, 0xFF, 0xFF)));
+        assert_eq!(look(16).background, rgb(0xFF, 0xFF, 0x00));
+        // Automatic text is black on white (the heading has its style's colour).
+        let text = String::from_utf16_lossy(&doc.text);
+        let item = text.find("First item").map(|b| text[..b].encode_utf16().count()).expect("the list item");
+        assert_eq!((look(item).color, look(item).background), (rgb(0, 0, 0), rgb(0xFF, 0xFF, 0xFF)));
+        assert_eq!(look(0).color, rgb(0x0F, 0x47, 0x61));
+
+        // A dark page: the text is rebuilt with its colours though the layout is the same.
+        app.run("view.darkMode", json!({})).unwrap();
+        let (_, node) = document(&mut app, &ctx);
+        let doc = node.text_document().expect("the document as text");
+        let dark = doc.looks.iter().rev().find(|l| l.0 <= item).map(|l| l.1.clone()).expect("a look");
+        let opts = crate::canvas::page_render_options(&app, false);
+        let paper = opts.paper_of(&app.session.doc);
+        assert_eq!(dark.background, rgb(paper.0, paper.1, paper.2));
+        // Automatic text turns light on the dark paper.
+        assert!(paper.luma() < 100.0 && dark.color.is_some_and(|c| c.red > 0xC0), "{dark:?} on {paper:?}");
     }
 
     #[test]
