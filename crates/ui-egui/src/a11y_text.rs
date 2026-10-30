@@ -710,6 +710,20 @@ mod tests {
         assert!(paper.luma() < 100.0 && dark.color.is_some_and(|c| c.red > 0xC0), "{dark:?} on {paper:?}");
     }
 
+    /// A misspelt word is a spelling error in the text, over the word alone, as NVDA's W and
+    /// NVDA+F read it.
+    #[test]
+    fn spelling_errors_are_marked_in_the_text() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "A beautifull day and anothr one."})).unwrap();
+        let (_, node) = document(&mut app, &egui::Context::default());
+        let doc = node.text_document().expect("the document as text");
+        let text = String::from_utf16_lossy(&doc.text);
+        let marked: Vec<(String, Annotation)> =
+            doc.annotations.iter().map(|(r, k)| (String::from_utf16_lossy(doc.text.get(r.clone()).unwrap_or_default()), *k)).collect();
+        assert_eq!(marked, [("beautifull".to_string(), Annotation::Spelling), ("anothr".to_string(), Annotation::Spelling)], "{text:?}");
+    }
+
     #[test]
     fn utf16_offsets_of_each_byte() {
         assert_eq!(utf16_offsets("a\u{1F600}b"), vec![0, 1, 1, 1, 1, 3, 4]);
