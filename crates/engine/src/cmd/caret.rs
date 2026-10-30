@@ -212,6 +212,8 @@ fn para_down(s: &mut Session, p: &Pos) -> Pos {
     }
 }
 
+/// Up (`dir` < 0) or Down: one line from the caret, keeping the column it came from (`goal_x`);
+/// past the story's first or last line, to its start or end. With `extend` the selection grows.
 fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();

@@ -259,6 +259,8 @@ fn indent_by_tab(s: &mut Session, f: &Pos) -> CmdResult {
     crate::cmd::para::indent(s, &Value::Null)
 }
 
+/// In a table: previous cell, its content selected as Tab does (the first cell stays). At the start
+/// of a list item: promote. Else outdent.
 pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
     if let Some((tpath, r, c)) = s.sel.focus.path.cell() {
         let story = s.sel.focus.story;
