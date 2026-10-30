@@ -2209,6 +2209,14 @@ fn right_click_on_a_picture_offers_wrap_text() {
         h.step();
     }
     assert!(h.query_by_label_contains("Fix Position on Page").is_some(), "the anchoring choices are offered");
+    // To a screen reader the styles are a choice of menu items, the current one checked (#4977).
+    {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::NodeT;
+        let toggled = |label: &str| h.get_by_role_and_label(Role::MenuItemRadio, label).accesskit_node().toggled();
+        assert_eq!(toggled("In Line with Text"), Some(Toggled::True), "the picture is in line with the text");
+        assert_eq!(toggled("Square"), Some(Toggled::False));
+    }
     h.get_by_label_contains("Square").click();
     for _ in 0..3 {
         h.step();
@@ -2534,6 +2542,83 @@ fn control_click_on_macos_opens_the_context_menu() {
 /// the focus; Down and Up go through the items, round from the last to the first, and End and
 /// Home to the last and the first, all without moving the caret behind it; the items are menu
 /// items to a screen reader; Escape closes the menu and the page has the keyboard again.
+#[test]
+fn the_context_menu_from_the_keyboard_gives_the_keyboard_back_where_it_belongs() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let new = || {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "The quick brown fox\nA second line"})).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+        a.canvas.want_focus = true;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h
+    };
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    let item_focused = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).is_some();
+    let text = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.plain_text(StoryRef::Body);
+
+    // A key typed in the frames before the page loses the focus goes to the menu, not the text.
+    let mut h = new();
+    let before = text(&h);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.step();
+    h.event(egui::Event::Text("x".into()));
+    run(&mut h);
+    assert_eq!(text(&h), before, "nothing is typed behind the menu");
+
+    // A right click over the menu opened from the keyboard reopens it for the mouse: the page has
+    // the keyboard, no item.
+    let mut h = new();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(item_focused(&h), "the menu has the keyboard");
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 12)).expect("laid out");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    run(&mut h);
+    assert!(h.state().canvas.context_menu_open, "the right click opens the menu");
+    assert!(!item_focused(&h), "no item has the keyboard");
+    assert!(h.state().canvas.focused, "the page has it");
+
+    // A click on the ribbon's font box closes the menu and leaves the keyboard to the box.
+    let mut h = new();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(item_focused(&h), "the menu has the keyboard");
+    // The ribbon's, at the top: the mini toolbar over the menu has one too.
+    h.get_all_by_role_and_label(Role::TextInput, "Font")
+        .min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+        .expect("the ribbon has a font box")
+        .click();
+    run(&mut h);
+    assert!(!h.state().canvas.context_menu_open, "the click closes the menu");
+    assert!(!h.state().canvas.focused, "the page doesn't take the keyboard back");
+    let font = h
+        .get_all_by_role_and_label(Role::TextInput, "Font")
+        .min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+        .expect("the ribbon has a font box");
+    assert!(font.is_focused(), "the font box has it");
+}
+
 #[test]
 fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     use egui::accesskit::Role;

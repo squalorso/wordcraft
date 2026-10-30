@@ -14,6 +14,13 @@ fn menu_item(app: &mut WordApp, resp: &egui::Response, name: &str) {
     app.canvas.context_menu_items.push((resp.layer_id, resp.id, resp.enabled()));
 }
 
+/// An item of a choice in the menu (Wrap Text's styles): a radio menu item to screen readers,
+/// checked when it is the current one.
+fn menu_choice(app: &mut WordApp, resp: &egui::Response, name: &str, checked: bool) {
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::MenuItemRadio, resp.enabled(), checked, name));
+    app.canvas.context_menu_items.push((resp.layer_id, resp.id, resp.enabled()));
+}
+
 /// Each item's place in the menu and the number of items, which screen readers say ("2 of 9")
 /// as in Word's menus; items that are off count too. The number goes on the menu: UI
 /// Automation takes it from the item's container.
@@ -236,7 +243,11 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         item(ui, app, "Insert Caption…", "references.caption", json!({}));
     }
     if object {
-        let trigger = ui.menu_button(tl!("Wrap Text"), |ui| crate::ribbon::wrap_text_items(ui, app));
+        let trigger = ui.menu_button(tl!("Wrap Text"), |ui| {
+            for (resp, name, checked) in crate::ribbon::wrap_text_items(ui, app) {
+                menu_choice(app, &resp, &name, checked);
+            }
+        });
         menu_item(app, &trigger.response, tl!("Wrap Text"));
     }
     if crate::widgets::enabled(app, "shape.fill") {

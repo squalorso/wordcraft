@@ -722,7 +722,9 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    // A menu opened from the keyboard has the keys, also in the frames before the page sees it
+    // lose the focus (#4977).
+    if app.canvas.focused && !app.canvas.context_menu_keyboard && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
@@ -1196,20 +1198,28 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     // Opened from the keyboard, the menu takes the keyboard, as Word's does: otherwise the arrows
     // move the caret behind it and a screen reader never hears it (#4977).
     if from_keys || secondary_clicked || eq_strip.is_some() {
+        // A click that opens the menu over one opened from the keyboard gives the keyboard back to
+        // the page: the item that had it stays focused otherwise.
+        if !from_keys && app.canvas.context_menu_keyboard {
+            app.canvas.want_focus = true;
+        }
         app.canvas.context_menu_keyboard = from_keys;
         app.canvas.context_menu_focus_first = from_keys;
     }
     // Keep the parent independently of egui's one memory popup: the toolbar's font, size and
     // colour controls use that slot for their own lists (as in a collapsed ribbon group).
     let mut open = app.canvas.context_menu_open;
+    let clicked_outside = open
+        && ui.input(|i| i.pointer.any_click())
+        && !ui
+            .input(|i| i.pointer.interact_pos())
+            .and_then(|p| ui.ctx().layer_id_at(p))
+            .is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip));
     if secondary_clicked || from_keys || eq_strip.is_some() {
         egui::Popup::close_all(ui.ctx());
         open = true;
-    } else if open && ui.input(|i| i.pointer.any_click()) {
-        let layer = ui.input(|i| i.pointer.interact_pos()).and_then(|p| ui.ctx().layer_id_at(p));
-        if !layer.is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip)) {
-            open = false;
-        }
+    } else if clicked_outside {
+        open = false;
     }
     let child_open = egui::Popup::is_any_open(ui.ctx());
     let mut shown = open;
@@ -1247,8 +1257,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     // The standalone selection toolbar stands down while the context popup owns the pointer.
     app.canvas.context_menu_open = shown;
     // A menu that had the keyboard gives it back to the page as it closes, unless the item chosen
-    // opened a dialog, which takes it (#4977).
-    if !shown && std::mem::take(&mut app.canvas.context_menu_keyboard) && app.dialog.is_none() {
+    // opened a dialog, which takes it, or a click elsewhere closed it: what was clicked takes it
+    // (#4977).
+    if !shown && std::mem::take(&mut app.canvas.context_menu_keyboard) && app.dialog.is_none() && !clicked_outside {
         app.canvas.want_focus = true;
     }
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
