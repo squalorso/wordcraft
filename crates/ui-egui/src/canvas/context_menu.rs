@@ -252,8 +252,19 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     }
     if object {
         let trigger = ui.menu_button(tl!("Wrap Text"), |ui| {
-            for (resp, name, checked) in crate::ribbon::wrap_text_items(ui, app) {
+            let choices = crate::ribbon::wrap_text_items(ui, app);
+            let ids: Vec<egui::Id> = choices.iter().map(|(resp, _, _)| resp.id).collect();
+            for (resp, name, checked) in choices {
                 menu_choice(app, &resp, &name, checked);
+            }
+            // Two choices, as the separator shows: the styles, and Move with Text or Fix Position
+            // on Page. Each item belongs to its own.
+            let (styles, anchoring) = ids.split_at_checked(crate::ribbon::WRAP_STYLES.len()).unwrap_or((&ids, &[]));
+            for group in [styles, anchoring] {
+                let nodes: Vec<egui::accesskit::NodeId> = group.iter().map(|id| id.accesskit_id()).collect();
+                for id in group {
+                    ui.ctx().accesskit_node_builder(*id, |n| n.set_radio_group(nodes.clone()));
+                }
             }
             number_items(ui, &app.canvas.context_menu_items);
         });

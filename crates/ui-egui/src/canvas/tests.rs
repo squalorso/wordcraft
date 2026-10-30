@@ -2216,6 +2216,10 @@ fn right_click_on_a_picture_offers_wrap_text() {
         let toggled = |label: &str| h.get_by_role_and_label(Role::MenuItemRadio, label).accesskit_node().toggled();
         assert_eq!(toggled("In Line with Text"), Some(Toggled::True), "the picture is in line with the text");
         assert_eq!(toggled("Square"), Some(Toggled::False));
+        // Two choices: the seven styles, and the two ways to anchor the object.
+        let group = |label: &str| h.get_by_role_and_label(Role::MenuItemRadio, label).accesskit_node().data().radio_group().len();
+        assert_eq!(group("Square"), 7, "the styles are a choice");
+        assert_eq!(group("Fix Position on Page"), 2, "and anchoring another");
     }
     h.get_by_label_contains("Square").click();
     for _ in 0..3 {
@@ -2538,10 +2542,6 @@ fn control_click_on_macos_opens_the_context_menu() {
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brown fox");
 }
 
-/// #4977: the menu Shift+F10 opens takes the keyboard, as Word's does. Its first enabled item has
-/// the focus; Down and Up go through the items, round from the last to the first, and End and
-/// Home to the last and the first, all without moving the caret behind it; the items are menu
-/// items to a screen reader; Escape closes the menu and the page has the keyboard again.
 /// #4977: from the keyboard, Right on a submenu's item opens the submenu and goes into it,
 /// Left comes back to the item, Enter goes in too, Escape closes only the submenu (the menu
 /// stays, its item has the keyboard), and Enter on a submenu's entry runs it, as in Word.
@@ -2672,6 +2672,11 @@ fn the_context_menu_from_the_keyboard_gives_the_keyboard_back_where_it_belongs()
     assert!(font.is_focused(), "the font box has it");
 }
 
+/// #4977: the menu Shift+F10 opens takes the keyboard, as Word's does. Its first enabled item has
+/// the focus; Down and Up go through the items, round from the last to the first, and End and
+/// Home to the last and the first, all without moving the caret behind it; the items are menu
+/// items to a screen reader; Escape closes the menu and the page has the keyboard again; Enter
+/// runs an item and closes the menu.
 #[test]
 fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     use egui::accesskit::Role;
@@ -2741,6 +2746,17 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     h.key_press(egui::Key::ArrowDown);
     run(&mut h);
     assert_ne!(h.state().session.sel, caret, "and the arrows move the caret again");
+
+    // Enter on an item runs it and closes the menu: Cut, with a word selected.
+    h.state_mut().run("select.text", json!({"text": "quick"})).unwrap();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(focused(&h).is_some_and(|l| l.starts_with("Cut")), "Cut has the keyboard: {:?}", focused(&h));
+    h.key_press(egui::Key::Enter);
+    run(&mut h);
+    assert!(!h.state().session.doc.plain_text(StoryRef::Body).contains("quick"), "Enter cut the word");
+    assert!(!h.state().canvas.context_menu_open, "and closed the menu");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
 }
 
 /// #3340: review.spelling (the Review tab's Spelling & Grammar button and the Home tab's
