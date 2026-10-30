@@ -21,9 +21,10 @@ use std::sync::Arc;
 use egui::accesskit::text_document::{Align, Annotation, LineBox, LineStyle, Look, Object, ObjectKind, ParaKind};
 use egui::accesskit::{self, Role, TextDocument, TextDocumentRef, TextPosition, TextSelection};
 use egui::{Id, Rect};
+use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{Align as DocAlign, LineSpacing, Rgb, Underline, VertAlign};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
-use wordcraft_doc::{Block, Document, Path, Pos, StoryRef};
+use wordcraft_doc::{Block, Document, InlineObject, Path, Pos, StoryRef};
 use wordcraft_geom::Unit;
 use wordcraft_layout::display::text_color;
 use wordcraft_layout::{DocLayout, ParaLayout, Placed};
@@ -277,7 +278,8 @@ impl Build<'_> {
         out
     }
 
-    /// One paragraph's text and units: its range, whether it is a list item, and its links.
+    /// One paragraph's text and units: its range, whether it is a list item, and its links and
+    /// pictures.
     fn para(&mut self, path: &Path) -> (Range<usize>, bool, Vec<Object>) {
         let (doc, layout) = (self.doc, self.layout);
         let start = self.s.text.len();
@@ -376,6 +378,22 @@ impl Build<'_> {
             }
             byte = end;
         }
+        // Pictures and charts: elements on their object character, named by their alt text, as
+        // screen readers find them in Word (a linked picture is inside its link). Decorative ones
+        // add nothing and stay out.
+        for off in p.object_offsets() {
+            let Some(o @ (InlineObject::Image { .. } | InlineObject::Graphic { .. })) = p.object_at(off) else { continue };
+            if o.is_decorative() {
+                continue;
+            }
+            let range = at(off)..at(off.saturating_add(OBJ.len_utf8()));
+            let picture = Object { kind: ObjectKind::Image { alt: o.alt_text().to_string() }, range, children: Vec::new() };
+            match links.iter_mut().find(|l| l.range.start <= picture.range.start && picture.range.end <= l.range.end) {
+                Some(link) => link.children.push(picture),
+                None => links.push(picture),
+            }
+        }
+        links.sort_by_key(|o| o.range.start);
         (start..s.text.len(), item, links)
     }
 }
@@ -744,6 +762,34 @@ mod tests {
         // The second section's text maps back to its paragraph.
         let start = doc.objects.get(1).map(|o| o.range.start).unwrap_or_default();
         assert_eq!(app.canvas.a11y.text.map.pos(start).map(|p| p.path), Some(Path(vec![1])));
+    }
+
+    /// A picture is an element on its object character, named by its alt text, as screen readers
+    /// find graphics in Word; a decorative one isn't.
+    #[test]
+    fn pictures_are_elements_named_by_their_alt_text() {
+        let mut png = Vec::new();
+        let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Before "})).unwrap();
+        app.run("insert.picture", json!({"data": data, "width": 80})).unwrap();
+        app.run("object.altText", json!({"text": "A red bar"})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        app.run("text.insert", json!({"text": " and "})).unwrap();
+        app.run("insert.picture", json!({"data": data, "width": 80})).unwrap();
+        app.run("object.altText", json!({"decorative": true})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        app.run("text.insert", json!({"text": " after"})).unwrap();
+        let (_, node) = document(&mut app, &egui::Context::default());
+        let doc = node.text_document().expect("the document as text");
+        let pictures: Vec<(ObjectKind, String)> = every(&doc.objects)
+            .into_iter()
+            .filter(|o| matches!(o.kind, ObjectKind::Image { .. }))
+            .map(|o| (o.kind.clone(), String::from_utf16_lossy(doc.text.get(o.range.clone()).unwrap_or_default())))
+            .collect();
+        assert_eq!(pictures, [(ObjectKind::Image { alt: "A red bar".into() }, "\u{FFFC}".to_string())], "the decorative picture isn't one");
     }
 
     /// A misspelt word is a spelling error in the text, over the word alone, as NVDA's W and
