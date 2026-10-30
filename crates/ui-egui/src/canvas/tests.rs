@@ -3132,6 +3132,20 @@ fn the_context_menu_in_a_table_follows_the_selection() {
     assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 2)), "the caret moved to the cell");
     assert_menu(&h, &["Insert", "Delete", "Split Cells", "Text Direction", "Table Properties…"], true);
     assert_menu(&h, &["Merge Cells", "Distribute Rows", "AutoFit", "Select", "Cell Alignment"], false);
+    // A submenu's items have their place in it, and it the number of them (#4977).
+    {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let at = menu_entry(&h, "Insert").expect("Insert");
+        h.event(egui::Event::PointerMoved(at));
+        steps(&mut h, 2);
+        // Named as egui names a button with a shortcut: these have none, so a space ends them.
+        let place = |label: &str| h.get_by_role_and_label(Role::MenuItem, &format!("{label} ")).accesskit_node().position_in_set();
+        assert_eq!(place("Insert Columns to the Left"), Some(0));
+        assert_eq!(place("Insert Rows Below"), Some(3));
+        let sizes: Vec<Option<usize>> = h.query_all_by_role(Role::Menu).map(|n| n.accesskit_node().size_of_set()).collect();
+        assert!(sizes.contains(&Some(4)), "the Insert submenu has 4 items: {sizes:?}");
+    }
     let depth = h.state().session.undo_depth();
     pick(&mut h, &["Insert", "Insert Rows Below"]);
     assert_eq!(h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len()), Some(3));

@@ -21,17 +21,16 @@ fn menu_choice(app: &mut WordApp, resp: &egui::Response, name: &str, checked: bo
     app.canvas.context_menu_items.push((resp.layer_id, resp.id, resp.enabled()));
 }
 
-/// Each item's place in the menu and the number of items, which screen readers say ("2 of 9")
-/// as in Word's menus; items that are off count too. The number goes on the menu: UI
-/// Automation takes it from the item's container.
+/// Each item's place in the menu (or submenu) `ui` draws, and the number of its items, which
+/// screen readers say ("2 of 9") as in Word's menus; items that are off count too. The number
+/// goes on the menu: UI Automation takes it from the item's container.
 fn number_items(ui: &Ui, items: &[(egui::LayerId, egui::Id, bool)]) {
     let here: Vec<egui::Id> = items.iter().filter(|(layer, _, _)| *layer == ui.layer_id()).map(|(_, id, _)| *id).collect();
-    let Some(menu) = ui.stack().iter().find(|s| s.kind() == Some(egui::UiKind::Menu)).map(|s| s.unique_id) else {
-        return;
-    };
-    ui.ctx().accesskit_node_builder(menu, |n| n.set_size_of_set(here.len()));
     for (at, id) in here.iter().enumerate() {
         ui.ctx().accesskit_node_builder(*id, |n| n.set_position_in_set(at));
+    }
+    if let Some(menu) = ui.stack().iter().find(|s| s.kind() == Some(egui::UiKind::Menu)).map(|s| s.unique_id) {
+        ui.ctx().accesskit_node_builder(menu, |n| n.set_size_of_set(here.len()));
     }
 }
 
@@ -204,6 +203,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                     ui.close();
                 }
             }
+            number_items(ui, &app.canvas.context_menu_items);
         });
         menu_item(app, &trigger.response, tl!("Synonyms"));
     }
@@ -247,6 +247,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             for (resp, name, checked) in crate::ribbon::wrap_text_items(ui, app) {
                 menu_choice(app, &resp, &name, checked);
             }
+            number_items(ui, &app.canvas.context_menu_items);
         });
         menu_item(app, &trigger.response, tl!("Wrap Text"));
     }
@@ -262,6 +263,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
             item(ui, app, "Insert Rows Above", "table.insertRowAbove", json!({}));
             item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
+            number_items(ui, &app.canvas.context_menu_items);
         });
         menu_item(app, &trigger.response, tl!("Insert"));
         // Every Delete is there whatever is selected, as on Word's Delete button: with the caret
@@ -271,6 +273,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
             item(ui, app, "Delete Rows", "table.deleteRow", json!({}));
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
+            number_items(ui, &app.canvas.context_menu_items);
         });
         menu_item(app, &trigger.response, tl!("Delete"));
         if pick == TablePick::Cell {
@@ -288,6 +291,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                 item(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
                 item(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
                 item(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
+                number_items(ui, &app.canvas.context_menu_items);
             });
             menu_item(app, &trigger.response, tl!("AutoFit"));
         }
