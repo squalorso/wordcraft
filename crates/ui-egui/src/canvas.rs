@@ -166,6 +166,14 @@ pub struct CanvasState {
     pub context_menu_open: bool,
     /// Shift+F10 (or `ui.contextMenu`) asked for the context menu at the caret (#821).
     pub context_menu_from_keys: bool,
+    /// The context menu was opened from the keyboard: its items have the keyboard, and the page
+    /// takes it back when the menu closes (#4977).
+    pub context_menu_keyboard: bool,
+    /// The context menu's first item still has to take the keyboard (#4977).
+    pub context_menu_focus_first: bool,
+    /// The context menu's items that take the keyboard, in order, with the layer they're drawn
+    /// on (the menu's, or a submenu's), rebuilt each frame the menu is drawn.
+    pub context_menu_items: Vec<(egui::LayerId, egui::Id)>,
     /// Where the context menu stands: the right-click point, or below the caret.
     pub context_menu_at: Option<Pos2>,
     /// The frame drawn around the equation being edited, on screen (its options strip opens the
@@ -384,6 +392,9 @@ impl Default for CanvasState {
             ink_ui: Default::default(),
             context_menu_open: false,
             context_menu_from_keys: false,
+            context_menu_keyboard: false,
+            context_menu_focus_first: false,
+            context_menu_items: Vec::new(),
             context_menu_at: None,
             eq_options: None,
             mini_anchor: None,
@@ -1182,6 +1193,12 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     } else if secondary_clicked {
         app.canvas.context_menu_at = resp.interact_pointer_pos();
     }
+    // Opened from the keyboard, the menu takes the keyboard, as Word's does: otherwise the arrows
+    // move the caret behind it and a screen reader never hears it (#4977).
+    if from_keys || secondary_clicked || eq_strip.is_some() {
+        app.canvas.context_menu_keyboard = from_keys;
+        app.canvas.context_menu_focus_first = from_keys;
+    }
     // Keep the parent independently of egui's one memory popup: the toolbar's font, size and
     // colour controls use that slot for their own lists (as in a collapsed ribbon group).
     let mut open = app.canvas.context_menu_open;
@@ -1229,6 +1246,11 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
     // The standalone selection toolbar stands down while the context popup owns the pointer.
     app.canvas.context_menu_open = shown;
+    // A menu that had the keyboard gives it back to the page as it closes, unless the item chosen
+    // opened a dialog, which takes it (#4977).
+    if !shown && std::mem::take(&mut app.canvas.context_menu_keyboard) && app.dialog.is_none() {
+        app.canvas.want_focus = true;
+    }
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
         ui.ctx().set_cursor_icon(c);
     } else if resp.hovered() || app.canvas.obj_drag.is_some() {

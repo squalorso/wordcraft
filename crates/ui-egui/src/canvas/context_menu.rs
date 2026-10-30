@@ -7,9 +7,72 @@ pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
 }
 
+/// An item of the menu: a menu item to screen readers (egui draws a button), named by its label
+/// and key, and kept in the order the keyboard goes through (#4977).
+fn menu_item(app: &mut WordApp, resp: &egui::Response, name: &str) {
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MenuItem, resp.enabled(), name));
+    if resp.enabled() {
+        app.canvas.context_menu_items.push((resp.layer_id, resp.id));
+    }
+}
+
+/// The keyboard in a menu, as in Word's: opened from the keyboard, the first item takes it; Up
+/// and Down go through the items of the menu (or submenu) the focus is in, round from the last to
+/// the first, Home and End to the first and the last, and Left and Right don't leave it. egui
+/// would move the focus to the nearest control in that direction, out of the menu (#4977).
+fn keyboard(app: &mut WordApp, ui: &Ui) {
+    let items = std::mem::take(&mut app.canvas.context_menu_items);
+    if app.canvas.context_menu_focus_first {
+        // Not in the popup's sizing pass, where nothing takes the keyboard yet.
+        if let Some((_, first)) = items.iter().find(|(layer, _)| *layer == ui.layer_id()).filter(|_| !ui.is_sizing_pass()) {
+            ui.memory_mut(|m| m.request_focus(*first));
+            app.canvas.context_menu_focus_first = false;
+        }
+        return;
+    }
+    let Some((layer, focused)) = items.iter().copied().find(|(_, id)| ui.memory(|m| m.has_focus(*id))) else {
+        return;
+    };
+    let level: Vec<egui::Id> = items.iter().filter(|(l, _)| *l == layer).map(|(_, id)| *id).collect();
+    let Some(at) = level.iter().position(|id| *id == focused) else {
+        return;
+    };
+    let last = level.len().saturating_sub(1);
+    let (up, down, home, end, side) = ui.input(|i| {
+        (
+            i.key_pressed(egui::Key::ArrowUp),
+            i.key_pressed(egui::Key::ArrowDown),
+            i.key_pressed(egui::Key::Home),
+            i.key_pressed(egui::Key::End),
+            i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowRight),
+        )
+    });
+    let to = if down {
+        Some(if at >= last { 0 } else { at + 1 })
+    } else if up {
+        Some(if at == 0 { last } else { at - 1 })
+    } else if home {
+        Some(0)
+    } else if end {
+        Some(last)
+    } else {
+        None
+    };
+    if to.is_some() || side {
+        ui.memory_mut(|m| {
+            // Instead of egui's move to the nearest control in the arrow's direction.
+            m.move_focus(egui::FocusDirection::None);
+            if let Some(id) = to.and_then(|i| level.get(i)) {
+                m.request_focus(*id);
+            }
+        });
+    }
+}
+
 /// Right-click inside an equation: its structures' actions, display and conversion.
 fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
     ui.set_min_width(260.0);
+    app.canvas.context_menu_items.clear();
     let acts = app.session.run("equation.structureActions", &json!({})).ok().and_then(|v| v.get("actions").cloned()).unwrap_or_default();
     let mut last_level = None;
     for a in acts.as_array().into_iter().flatten() {
@@ -22,7 +85,9 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
             ui.separator();
         }
         last_level = Some(level);
-        if ui.button(tl!(label)).clicked() {
+        let resp = ui.button(tl!(label));
+        menu_item(app, &resp, tl!(label));
+        if resp.clicked() {
             let _ = app.run("equation.structure", json!({"action": action, "level": level}));
             app.canvas.want_focus = true;
             ui.close();
@@ -40,12 +105,15 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
         ("Close Equation", "equation.exit", json!({})),
     ];
     for (label, id, params) in items {
-        if ui.button(tl!(label)).clicked() {
+        let resp = ui.button(tl!(label));
+        menu_item(app, &resp, tl!(label));
+        if resp.clicked() {
             let _ = app.run(id, params);
             app.canvas.want_focus = true;
             ui.close();
         }
     }
+    keyboard(app, ui);
 }
 
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
@@ -53,10 +121,15 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         return equation_menu(app, ui);
     }
     ui.set_min_width(220.0);
+    app.canvas.context_menu_items.clear();
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc)).clicked() {
+        // The name egui gives a button with a shortcut: its label, a space, its key.
+        let name = format!("{} {sc}", tl!(label));
+        let resp = ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc));
+        menu_item(app, &resp, &name);
+        if resp.clicked() {
             let _ = app.run(id, params);
             ui.close();
         }
@@ -73,7 +146,9 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
         for sgt in sugg {
-            if ui.button(egui::RichText::new(&sgt).strong()).clicked() {
+            let resp = ui.button(egui::RichText::new(&sgt).strong());
+            menu_item(app, &resp, &sgt);
+            if resp.clicked() {
                 let _ = app.run("review.applySuggestion", json!({"text": sgt}));
                 ui.close();
             }
@@ -94,9 +169,11 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "Paste Special…", "edit.pasteSpecial", json!({}));
     ui.separator();
     if let Some(syn) = app.canvas.context_synonyms.clone().and_then(|v| v.as_array().cloned()).filter(|a| !a.is_empty()) {
-        ui.menu_button(tl!("Synonyms"), |ui| {
+        let trigger = ui.menu_button(tl!("Synonyms"), |ui| {
             for w in syn.iter().filter_map(|x| x.as_str()) {
-                if ui.button(w).clicked() {
+                let resp = ui.button(w);
+                menu_item(app, &resp, w);
+                if resp.clicked() {
                     let _ = app.run("select.word", json!({}));
                     let (a, b) = app.session.sel.ordered();
                     let trimmed = app.session.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off)).map(|t| t.trim_end().len()).unwrap_or(0);
@@ -107,6 +184,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         });
+        menu_item(app, &trigger.response, tl!("Synonyms"));
     }
     item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
@@ -144,7 +222,8 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         item(ui, app, "Insert Caption…", "references.caption", json!({}));
     }
     if object {
-        ui.menu_button(tl!("Wrap Text"), |ui| crate::ribbon::wrap_text_items(ui, app));
+        let trigger = ui.menu_button(tl!("Wrap Text"), |ui| crate::ribbon::wrap_text_items(ui, app));
+        menu_item(app, &trigger.response, tl!("Wrap Text"));
     }
     if crate::widgets::enabled(app, "shape.fill") {
         item(ui, app, "Format Shape…", "view.formatShapePane", json!({"value": true}));
@@ -153,20 +232,22 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         // The table's items follow what is selected, as in Word (2019, Windows).
         let pick = table_pick(&app.session);
         ui.separator();
-        ui.menu_button(tl!("Insert"), |ui| {
+        let trigger = ui.menu_button(tl!("Insert"), |ui| {
             item(ui, app, "Insert Columns to the Left", "table.insertColumnLeft", json!({}));
             item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
             item(ui, app, "Insert Rows Above", "table.insertRowAbove", json!({}));
             item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
         });
+        menu_item(app, &trigger.response, tl!("Insert"));
         // Every Delete is there whatever is selected, as on Word's Delete button: with the caret
         // in a cell, Delete Table is how the table goes (#1198).
-        ui.menu_button(tl!("Delete"), |ui| {
+        let trigger = ui.menu_button(tl!("Delete"), |ui| {
             item(ui, app, "Delete Cells", "table.deleteCells", json!({}));
             item(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
             item(ui, app, "Delete Rows", "table.deleteRow", json!({}));
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
         });
+        menu_item(app, &trigger.response, tl!("Delete"));
         if pick == TablePick::Cell {
             item(ui, app, "Split Cells", "table.split", json!({}));
         }
@@ -178,11 +259,12 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Distribute Columns", "table.distributeColumns", json!({}));
         }
         if pick == TablePick::Table {
-            ui.menu_button(tl!("AutoFit"), |ui| {
+            let trigger = ui.menu_button(tl!("AutoFit"), |ui| {
                 item(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
                 item(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
                 item(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
             });
+            menu_item(app, &trigger.response, tl!("AutoFit"));
         }
         item(ui, app, "Text Direction", "table.textDirection", json!({}));
         if pick == TablePick::Table {
@@ -190,6 +272,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         }
         item(ui, app, "Table Properties…", "table.properties", json!({}));
     }
+    keyboard(app, ui);
 }
 
 /// What of a table the selection is: Word's context menu offers different table items for each.

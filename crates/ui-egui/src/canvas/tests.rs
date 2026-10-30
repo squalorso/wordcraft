@@ -2530,6 +2530,76 @@ fn control_click_on_macos_opens_the_context_menu() {
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brown fox");
 }
 
+/// #4977: the menu Shift+F10 opens takes the keyboard, as Word's does. Its first enabled item has
+/// the focus; Down and Up go through the items, round from the last to the first, and End and
+/// Home to the last and the first, all without moving the caret behind it; the items are menu
+/// items to a screen reader; Escape closes the menu and the page has the keyboard again.
+#[test]
+fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox\nA second line"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    run(&mut h);
+    let caret = h.state().session.sel.clone();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(h.state().canvas.context_menu_open, "Shift+F10 opens the menu");
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default())
+    };
+    let first = focused(&h).expect("an item of the menu has the keyboard");
+    let items: Vec<String> = h
+        .query_all_by_role(Role::MenuItem)
+        .filter(|n| !n.accesskit_node().is_disabled())
+        .map(|n| n.accesskit_node().label().unwrap_or_default())
+        .collect();
+    assert_eq!(items.first(), Some(&first), "the first enabled item has it");
+    assert!(items.len() > 2, "the menu has several items: {items:?}");
+    h.key_press(egui::Key::ArrowDown);
+    run(&mut h);
+    assert_eq!(focused(&h).as_ref(), items.get(1), "Down goes to the next item");
+    h.key_press(egui::Key::ArrowUp);
+    run(&mut h);
+    assert_eq!(focused(&h), Some(first.clone()), "Up goes back");
+    h.key_press(egui::Key::ArrowUp);
+    run(&mut h);
+    assert_eq!(focused(&h).as_ref(), items.last(), "Up from the first item goes round to the last");
+    h.key_press(egui::Key::ArrowDown);
+    run(&mut h);
+    assert_eq!(focused(&h), Some(first.clone()), "and Down from the last to the first");
+    h.key_press(egui::Key::End);
+    run(&mut h);
+    assert_eq!(focused(&h).as_ref(), items.last(), "End goes to the last item");
+    h.key_press(egui::Key::Home);
+    run(&mut h);
+    assert_eq!(focused(&h), Some(first), "Home to the first");
+    assert_eq!(h.state().session.sel, caret, "the arrows never moved the caret behind the menu");
+    assert!(h.state().canvas.context_menu_open, "the menu is still open");
+    h.key_press(egui::Key::Escape);
+    run(&mut h);
+    assert!(!h.state().canvas.context_menu_open, "Escape closes it");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
+    h.key_press(egui::Key::ArrowDown);
+    run(&mut h);
+    assert_ne!(h.state().session.sel, caret, "and the arrows move the caret again");
+}
+
 /// #3340: review.spelling (the Review tab's Spelling & Grammar button and the Home tab's
 /// Editor button both run it) only moved the selection to the next issue — with no way to see
 /// or apply a suggestion from there, just the generic selection toolbar, it looked broken.
