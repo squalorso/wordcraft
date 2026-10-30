@@ -140,7 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-10-30: Shift+F10's context menu takes the keyboard, as Word's does: its first enabled item has the focus, Up and Down go round its items, Home and End to the first and the last, Enter runs one and Escape gives the keyboard back to the page. Right or Enter opens a submenu and goes into it, Left comes back, and Escape there closes that submenu only. The items are menu items to screen readers, with their place in the menu, and an item with a submenu says it is collapsed or expanded (#4977); a right click still leaves the keyboard on the page. Readiness estimates unchanged.
+- 2026-10-30: Shift+F10's context menu takes the keyboard, as Word's does: its first item has the focus, Up and Down go round its items (those that are off too, which say they are unavailable), Home and End to the first and the last, Enter runs one (one that opens a dialog gives the dialog the keyboard) and Escape gives the keyboard back to the page. Right or Enter opens a submenu and goes into it, Left comes back, and Escape there closes that submenu only. The items are menu items to screen readers, with their place in the menu, and an item with a submenu says it is collapsed or expanded (#4977); a right click still leaves the keyboard on the page. Readiness estimates unchanged.
 
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 

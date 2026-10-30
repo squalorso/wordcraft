@@ -8,23 +8,24 @@ pub(super) fn context_suggestions(app: &mut WordApp) {
 }
 
 /// An item of the menu: a menu item to screen readers (egui draws a button), named by its label
-/// and key, and kept in the order the keyboard goes through (#4977).
-fn menu_item(app: &mut WordApp, resp: &egui::Response, name: &str) {
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MenuItem, resp.enabled(), name));
-    app.canvas.context_menu_items.push((resp.layer_id, resp.id, resp.enabled()));
+/// and key, and kept in the order the keyboard goes through (#4977). One that is off (not `on`)
+/// still takes the keyboard, as in Word's menus, and screen readers say it is unavailable.
+fn menu_item(app: &mut WordApp, resp: &egui::Response, name: &str, on: bool) {
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MenuItem, on, name));
+    app.canvas.context_menu_items.push((resp.layer_id, resp.id));
 }
 
 /// An item of a choice in the menu (Wrap Text's styles): a radio menu item to screen readers,
 /// checked when it is the current one.
 fn menu_choice(app: &mut WordApp, resp: &egui::Response, name: &str, checked: bool) {
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::MenuItemRadio, resp.enabled(), checked, name));
-    app.canvas.context_menu_items.push((resp.layer_id, resp.id, resp.enabled()));
+    app.canvas.context_menu_items.push((resp.layer_id, resp.id));
 }
 
 /// The item that opens a submenu: a menu item that has one, collapsed or expanded, which screen
 /// readers say ("Insert, collapsed") as in Word's menus.
 fn submenu_item(app: &mut WordApp, ui: &Ui, trigger: &egui::InnerResponse<Option<()>>, name: &str) {
-    menu_item(app, &trigger.response, name);
+    menu_item(app, &trigger.response, name, true);
     let open = trigger.inner.is_some();
     ui.ctx().accesskit_node_builder(trigger.response.id, |n| {
         n.set_has_popup(egui::accesskit::HasPopup::Menu);
@@ -35,8 +36,8 @@ fn submenu_item(app: &mut WordApp, ui: &Ui, trigger: &egui::InnerResponse<Option
 /// Each item's place in the menu (or submenu) `ui` draws, and the number of its items, which
 /// screen readers say ("2 of 9") as in Word's menus; items that are off count too. The number
 /// goes on the menu: UI Automation takes it from the item's container.
-fn number_items(ui: &Ui, items: &[(egui::LayerId, egui::Id, bool)]) {
-    let here: Vec<egui::Id> = items.iter().filter(|(layer, _, _)| *layer == ui.layer_id()).map(|(_, id, _)| *id).collect();
+fn number_items(ui: &Ui, items: &[(egui::LayerId, egui::Id)]) {
+    let here: Vec<egui::Id> = items.iter().filter(|(layer, _)| *layer == ui.layer_id()).map(|(_, id)| *id).collect();
     for (at, id) in here.iter().enumerate() {
         ui.ctx().accesskit_node_builder(*id, |n| n.set_position_in_set(at));
     }
@@ -45,14 +46,13 @@ fn number_items(ui: &Ui, items: &[(egui::LayerId, egui::Id, bool)]) {
     }
 }
 
-/// The keyboard in a menu, as in Word's: opened from the keyboard, the first item takes it; Up
-/// and Down go through the items of the menu (or submenu) the focus is in, round from the last to
+/// The keyboard in a menu, as in Word's: opened from the keyboard, the first item takes it (one
+/// that is off too, as in Word); Up and Down go through the items of the menu (or submenu) the focus is in, round from the last to
 /// the first, Home and End to the first and the last, and Left and Right don't leave it. egui
 /// would move the focus to the nearest control in that direction, out of the menu (#4977).
 fn keyboard(app: &mut WordApp, ui: &Ui) {
-    let all = std::mem::take(&mut app.canvas.context_menu_items);
-    number_items(ui, &all);
-    let items: Vec<(egui::LayerId, egui::Id)> = all.iter().filter(|(_, _, on)| *on).map(|(layer, id, _)| (*layer, *id)).collect();
+    let items = std::mem::take(&mut app.canvas.context_menu_items);
+    number_items(ui, &items);
     if app.canvas.context_menu_focus_first {
         // Not in the popup's sizing pass, where nothing takes the keyboard yet.
         if let Some((_, first)) = items.iter().find(|(layer, _)| *layer == ui.layer_id()).filter(|_| !ui.is_sizing_pass()) {
@@ -70,7 +70,7 @@ fn keyboard(app: &mut WordApp, ui: &Ui) {
     app.canvas.context_menu_submenu_item = if layer == ui.layer_id() {
         None
     } else {
-        all.iter().map(|(_, id, _)| *id).find(|id| egui::containers::menu::SubMenu::id_from_widget_id(*id) == layer.id)
+        items.iter().map(|(_, id)| *id).find(|id| egui::containers::menu::SubMenu::id_from_widget_id(*id) == layer.id)
     };
     let level: Vec<egui::Id> = items.iter().filter(|(l, _)| *l == layer).map(|(_, id)| *id).collect();
     let Some(at) = level.iter().position(|id| *id == focused) else {
@@ -125,7 +125,7 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
         }
         last_level = Some(level);
         let resp = ui.button(tl!(label));
-        menu_item(app, &resp, tl!(label));
+        menu_item(app, &resp, tl!(label), true);
         if resp.clicked() {
             let _ = app.run("equation.structure", json!({"action": action, "level": level}));
             app.canvas.want_focus = true;
@@ -145,7 +145,7 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
     ];
     for (label, id, params) in items {
         let resp = ui.button(tl!(label));
-        menu_item(app, &resp, tl!(label));
+        menu_item(app, &resp, tl!(label), true);
         if resp.clicked() {
             let _ = app.run(id, params);
             app.canvas.want_focus = true;
@@ -166,9 +166,18 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         let on = crate::widgets::enabled(app, id);
         // The name egui gives a button with a shortcut: its label, a space, its key.
         let name = format!("{} {sc}", tl!(label));
-        let resp = ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc));
-        menu_item(app, &resp, &name);
-        if resp.clicked() {
+        // An item that is off takes the keyboard too (`menu_item`): egui gives none to a disabled
+        // button, so it is drawn faded instead, and does nothing.
+        let resp = ui
+            .scope(|ui| {
+                if !on {
+                    ui.multiply_opacity(ui.visuals().disabled_alpha());
+                }
+                ui.add(egui::Button::new(tl!(label)).shortcut_text(sc))
+            })
+            .inner;
+        menu_item(app, &resp, &name, on);
+        if on && resp.clicked() {
             let _ = app.run(id, params);
             ui.close();
         }
@@ -186,7 +195,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         }
         for sgt in sugg {
             let resp = ui.button(egui::RichText::new(&sgt).strong());
-            menu_item(app, &resp, &sgt);
+            menu_item(app, &resp, &sgt, true);
             if resp.clicked() {
                 let _ = app.run("review.applySuggestion", json!({"text": sgt}));
                 ui.close();
@@ -211,7 +220,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         let trigger = ui.menu_button(tl!("Synonyms"), |ui| {
             for w in syn.iter().filter_map(|x| x.as_str()) {
                 let resp = ui.button(w);
-                menu_item(app, &resp, w);
+                menu_item(app, &resp, w, true);
                 if resp.clicked() {
                     let _ = app.run("select.word", json!({}));
                     let (a, b) = app.session.sel.ordered();

@@ -175,8 +175,8 @@ pub struct CanvasState {
     /// to take the keyboard: the item that had it is gone (#4977).
     pub dialog_focus_first: bool,
     /// The context menu's items in order, with the layer they're drawn on (the menu's, or a
-    /// submenu's) and whether they're on, rebuilt each frame the menu is drawn.
-    pub context_menu_items: Vec<(egui::LayerId, egui::Id, bool)>,
+    /// submenu's), rebuilt each frame the menu is drawn.
+    pub context_menu_items: Vec<(egui::LayerId, egui::Id)>,
     /// The item whose submenu has the keyboard: Escape closes that submenu only and goes back to
     /// it, as in Word (#4977).
     pub context_menu_submenu_item: Option<egui::Id>,

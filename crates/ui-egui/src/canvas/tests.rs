@@ -2677,9 +2677,10 @@ fn the_context_menu_from_the_keyboard_gives_the_keyboard_back_where_it_belongs()
     assert!(font.is_focused(), "the font box has it");
 }
 
-/// #4977: the menu Shift+F10 opens takes the keyboard, as Word's does. Its first enabled item has
-/// the focus; Down and Up go through the items, round from the last to the first, and End and
-/// Home to the last and the first, all without moving the caret behind it; the items are menu
+/// #4977: the menu Shift+F10 opens takes the keyboard, as Word's does. Its first item has the
+/// focus, even when it is off (Cut, with nothing selected), and says it is unavailable; Enter
+/// there does nothing. Down and Up go through the items, round from the last to the first, and End
+/// and Home to the last and the first, all without moving the caret behind it; the items are menu
 /// items to a screen reader; Escape closes the menu and the page has the keyboard again; Enter
 /// runs an item and closes the menu.
 #[test]
@@ -2712,13 +2713,20 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
         h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default())
     };
     let first = focused(&h).expect("an item of the menu has the keyboard");
-    let items: Vec<String> = h
-        .query_all_by_role(Role::MenuItem)
-        .filter(|n| !n.accesskit_node().is_disabled())
-        .map(|n| n.accesskit_node().label().unwrap_or_default())
-        .collect();
-    assert_eq!(items.first(), Some(&first), "the first enabled item has it");
+    let items: Vec<String> = h.query_all_by_role(Role::MenuItem).map(|n| n.accesskit_node().label().unwrap_or_default()).collect();
+    assert_eq!(items.first(), Some(&first), "the first item has it");
     assert!(items.len() > 2, "the menu has several items: {items:?}");
+    assert!(first.starts_with("Cut"), "the first item is Cut: {first}");
+    let off = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).is_some_and(|n| n.accesskit_node().is_disabled())
+    };
+    assert!(off(&h), "Cut is off with nothing selected, and says so");
+    let text = h.state().session.doc.plain_text(StoryRef::Body);
+    h.key_press(egui::Key::Enter);
+    run(&mut h);
+    assert!(h.state().canvas.context_menu_open, "Enter on an item that is off leaves the menu open");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text, "and does nothing");
+    assert_eq!(focused(&h), Some(first.clone()), "the item keeps the keyboard");
     // Each item knows its place, and the menu the number of items (those that are off too).
     let all = h.query_all_by_role(Role::MenuItem).count();
     let places: Vec<Option<usize>> = h.query_all_by_role(Role::MenuItem).map(|n| n.accesskit_node().position_in_set()).collect();
@@ -2762,9 +2770,36 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     assert!(!h.state().session.doc.plain_text(StoryRef::Body).contains("quick"), "Enter cut the word");
     assert!(!h.state().canvas.context_menu_open, "and closed the menu");
     assert!(h.state().canvas.focused, "the page has the keyboard again");
+}
 
-    // An item that opens a dialog (Font…) gives the keyboard to the dialog's first control, and
-    // Tab goes on through the dialog, not the ribbon.
+/// #4977: an item of the menu Shift+F10 opens that opens a dialog (Font…) gives the keyboard to
+/// the dialog's first control, and Tab goes on through the dialog, not the ribbon; the Enter that
+/// chose the item doesn't also press the dialog's OK.
+#[test]
+fn an_item_of_the_keyboard_menu_gives_its_dialog_the_keyboard() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default())
+    };
+    run(&mut h);
     h.state_mut().run("ui.contextMenu", json!({})).unwrap();
     run(&mut h);
     for _ in 0..30 {
