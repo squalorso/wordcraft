@@ -23,7 +23,7 @@ use egui::accesskit::{self, Role, TextDocument, TextDocumentRef, TextPosition, T
 use egui::{Id, Rect};
 use wordcraft_doc::props::{Align as DocAlign, LineSpacing, Rgb, Underline, VertAlign};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
-use wordcraft_doc::{Block, Blocks, Document, Path, Pos, StoryRef};
+use wordcraft_doc::{Block, Document, Path, Pos, StoryRef};
 use wordcraft_geom::Unit;
 use wordcraft_layout::display::text_color;
 use wordcraft_layout::{DocLayout, ParaLayout, Placed};
@@ -194,7 +194,17 @@ impl Map {
 pub fn build(doc: &Document, layout: &DocLayout, opts: &RenderOptions) -> (TextDocument, Map) {
     let paper = opts.paper_of(doc);
     let mut b = Build { doc, layout, opts, paper, s: TextDocument::default(), last_look: None, pages: Vec::new(), map: Map::default() };
-    b.s.objects = b.blocks(&doc.body, &[]);
+    // Each section around its blocks, so a screen reader can say which one the text is in: a
+    // section ends with the paragraph that holds its break, the last with the body.
+    let mut first = 0;
+    for (end, _) in doc.sections() {
+        if let Some(part) = doc.body.get(first..=end).filter(|p| !p.is_empty()) {
+            let start = b.s.text.len();
+            let children = b.blocks(part, first, &[]);
+            b.s.objects.push(Object { kind: ObjectKind::Section, range: start..b.s.text.len(), children });
+        }
+        first = first.max(end.saturating_add(1));
+    }
     let Build { mut s, mut pages, mut map, .. } = b;
     // A page starts at the first text placed on it.
     pages.sort_unstable();
@@ -221,13 +231,13 @@ struct Build<'a> {
 }
 
 impl Build<'_> {
-    /// The blocks' text, and their elements.
-    fn blocks(&mut self, blocks: &Blocks, prefix: &[u32]) -> Vec<Object> {
+    /// The blocks' text, and their elements; the first block is number `first` under `prefix`.
+    fn blocks(&mut self, blocks: &[Arc<Block>], first: usize, prefix: &[u32]) -> Vec<Object> {
         let mut out = Vec::new();
         let mut list: Option<Object> = None;
         for (i, b) in blocks.iter().enumerate() {
             let mut path = prefix.to_vec();
-            path.push(u32::try_from(i).unwrap_or(u32::MAX));
+            path.push(u32::try_from(first.saturating_add(i)).unwrap_or(u32::MAX));
             match &**b {
                 Block::Para(_) => {
                     let (range, item, links) = self.para(&Path(path));
@@ -253,7 +263,7 @@ impl Build<'_> {
                             p.push(u32::try_from(r).unwrap_or(u32::MAX));
                             p.push(u32::try_from(c).unwrap_or(u32::MAX));
                             let cs = self.s.text.len();
-                            let children = self.blocks(&cell.blocks, &p);
+                            let children = self.blocks(&cell.blocks, 0, &p);
                             cells.push(Object { kind: ObjectKind::Cell { row: r, col }, range: cs..self.s.text.len(), children });
                             col = col.saturating_add(cell.span());
                         }
@@ -485,6 +495,11 @@ mod tests {
         app
     }
 
+    /// Every element in the text, depth first.
+    fn every(objects: &[Object]) -> Vec<&Object> {
+        objects.iter().flat_map(|o| std::iter::once(o).chain(every(&o.children))).collect()
+    }
+
     /// One frame of `app` in `ctx` with AccessKit on, the document described as text, and
     /// `events`: what AccessKit was told.
     fn frame(app: &mut crate::WordApp, ctx: &egui::Context, events: Vec<egui::Event>) -> Option<accesskit::TreeUpdate> {
@@ -554,12 +569,12 @@ mod tests {
         for w in [16, 21, 25] {
             assert!(doc.words.contains(&w), "word at {w}: {:?}", doc.words);
         }
-        let link = doc.objects.iter().find(|o| matches!(o.kind, ObjectKind::Link { .. })).expect("a link");
+        let link = every(&doc.objects).into_iter().find(|o| matches!(o.kind, ObjectKind::Link { .. })).expect("a link");
         assert_eq!(link.range, 21..25);
         assert_eq!(link.kind, ObjectKind::Link { url: "https://example.com".into() });
-        let list = doc.objects.iter().find(|o| o.kind == ObjectKind::List).expect("a list");
+        let list = every(&doc.objects).into_iter().find(|o| o.kind == ObjectKind::List).expect("a list");
         assert_eq!(list.children.iter().map(|c| c.kind.clone()).collect::<Vec<_>>(), vec![ObjectKind::ListItem]);
-        let table = doc.objects.iter().find(|o| o.kind == ObjectKind::Table { rows: 2, cols: 2 }).expect("a 2 × 2 table");
+        let table = every(&doc.objects).into_iter().find(|o| o.kind == ObjectKind::Table { rows: 2, cols: 2 }).expect("a 2 × 2 table");
         assert_eq!(table.children.len(), 4);
         let cell = table.children.first().expect("a cell");
         assert_eq!(cell.kind, ObjectKind::Cell { row: 0, col: 0 });
@@ -613,9 +628,8 @@ mod tests {
         let mut app = sample();
         let (_, node) = document(&mut app, &egui::Context::default());
         let doc = node.text_document().expect("the document as text");
-        let cell = doc
-            .objects
-            .iter()
+        let cell = every(&doc.objects)
+            .into_iter()
             .find_map(|o| match o.kind {
                 ObjectKind::Table { .. } => o.children.first().cloned(),
                 _ => None,
@@ -647,7 +661,7 @@ mod tests {
         app.run("table.merge", json!({})).unwrap();
         let (_, node) = document(&mut app, &egui::Context::default());
         let doc = node.text_document().expect("the document as text");
-        let table = doc.objects.iter().find(|o| matches!(o.kind, ObjectKind::Table { .. })).expect("a table");
+        let table = every(&doc.objects).into_iter().find(|o| matches!(o.kind, ObjectKind::Table { .. })).expect("a table");
         assert_eq!(table.kind, ObjectKind::Table { rows: 2, cols: 3 });
         let cells: Vec<ObjectKind> = table.children.iter().map(|c| c.kind.clone()).collect();
         let cell = |row, col| ObjectKind::Cell { row, col };
@@ -708,6 +722,28 @@ mod tests {
         assert_eq!(dark.background, rgb(paper.0, paper.1, paper.2));
         // Automatic text turns light on the dark paper.
         assert!(paper.luma() < 100.0 && dark.color.is_some_and(|c| c.red > 0xC0), "{dark:?} on {paper:?}");
+    }
+
+    /// Each section is an element around its text, so a screen reader can say which section the
+    /// text is in; what is inside it keeps its own elements.
+    #[test]
+    fn sections_are_elements_around_their_text() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "One"})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        app.run("layout.break", json!({"kind": "nextPage"})).unwrap();
+        app.run("text.insert", json!({"text": "Two "})).unwrap();
+        app.run("insert.link", json!({"url": "https://example.com", "text": "link"})).unwrap();
+        let (_, node) = document(&mut app, &egui::Context::default());
+        let doc = node.text_document().expect("the document as text");
+        let text = |o: &Object| String::from_utf16_lossy(doc.text.get(o.range.clone()).unwrap_or_default());
+        let sections: Vec<(ObjectKind, String)> = doc.objects.iter().map(|o| (o.kind.clone(), text(o))).collect();
+        assert_eq!(sections, [(ObjectKind::Section, "One\r".to_string()), (ObjectKind::Section, "Two link\r".to_string())]);
+        let inside: Vec<String> = doc.objects.get(1).map(|o| o.children.iter().map(text).collect()).unwrap_or_default();
+        assert_eq!(inside, ["link"]);
+        // The second section's text maps back to its paragraph.
+        let start = doc.objects.get(1).map(|o| o.range.start).unwrap_or_default();
+        assert_eq!(app.canvas.a11y.text.map.pos(start).map(|p| p.path), Some(Path(vec![1])));
     }
 
     /// A misspelt word is a spelling error in the text, over the word alone, as NVDA's W and
