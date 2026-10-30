@@ -2762,6 +2762,35 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     assert!(!h.state().session.doc.plain_text(StoryRef::Body).contains("quick"), "Enter cut the word");
     assert!(!h.state().canvas.context_menu_open, "and closed the menu");
     assert!(h.state().canvas.focused, "the page has the keyboard again");
+
+    // An item that opens a dialog (Font…) gives the keyboard to the dialog's first control, and
+    // Tab goes on through the dialog, not the ribbon.
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    for _ in 0..30 {
+        if focused(&h).is_some_and(|l| l.starts_with("Font")) {
+            break;
+        }
+        h.key_press(egui::Key::ArrowDown);
+        run(&mut h);
+    }
+    assert!(focused(&h).is_some_and(|l| l.starts_with("Font")), "Font… has the keyboard: {:?}", focused(&h));
+    h.key_press(egui::Key::Enter);
+    run(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("font"), "Enter opened the Font dialog");
+    let in_font_dialog = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.is_focused()).is_some_and(|n| {
+            std::iter::successors(n.accesskit_node().parent(), |p| p.parent())
+                .any(|p| p.role() == Role::Window && p.label().as_deref() == Some("Font"))
+        })
+    };
+    assert!(in_font_dialog(&h), "a control of the dialog has the keyboard");
+    assert!(!h.state().canvas.focused, "not the page");
+    let first = h.ctx.memory(|m| m.focused());
+    h.key_press(egui::Key::Tab);
+    run(&mut h);
+    assert_ne!(h.ctx.memory(|m| m.focused()), first, "Tab moves on");
+    assert!(in_font_dialog(&h), "within the dialog");
 }
 
 /// #3340: review.spelling (the Review tab's Spelling & Grammar button and the Home tab's

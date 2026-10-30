@@ -73,6 +73,7 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
+        app.canvas.dialog_focus_first = false;
         return;
     };
     let mut close = false;
@@ -134,11 +135,18 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     };
     let id = egui::Id::unique(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
+    let mut body_rect = None;
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
         close = body(app, ui, &mut d);
+        body_rect = Some(ui.min_rect());
     });
     if let Some(shown) = &shown {
+        if app.canvas.dialog_focus_first
+            && let Some(body) = body_rect
+        {
+            app.canvas.dialog_focus_first = !focus_first_control(ctx, shown.response.layer_id, body);
+        }
         if let Dialog::SaveChanges { name, message, .. } = &d {
             let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
             let mut description = tl!("Your changes will be lost if you don't save them.").to_string();
@@ -159,9 +167,29 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
     if close {
         app.canvas.want_focus = true;
+        app.canvas.dialog_focus_first = false;
     } else {
         app.dialog = Some(d);
     }
+}
+
+/// Gives the keyboard to the first control in a dialog's body (`body`, on the window's `layer`),
+/// as Word's dialogs do when they open, unless one of the dialog's own controls took it already.
+/// False while the window has no control to give it to yet (its sizing pass draws them hidden).
+fn focus_first_control(ctx: &egui::Context, layer: egui::LayerId, body: egui::Rect) -> bool {
+    let focused = ctx.memory(|m| m.focused());
+    let (taken, first) = ctx.viewport(|v| {
+        let widgets = &v.this_pass.widgets;
+        let taken = focused.and_then(|id| widgets.get(id)).is_some_and(|w| w.layer_id == layer);
+        let first = widgets.get_layer(layer).find(|w| w.enabled && w.visible && w.sense.is_focusable() && body.contains_rect(w.rect)).map(|w| w.id);
+        (taken, first)
+    });
+    if taken {
+        return true;
+    }
+    let Some(first) = first else { return false };
+    ctx.memory_mut(|m| m.request_focus(first));
+    true
 }
 
 /// Cancel key for dialogs: Escape everywhere, plus ⌘. (Command+Period) on macOS.

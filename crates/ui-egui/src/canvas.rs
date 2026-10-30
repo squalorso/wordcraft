@@ -171,6 +171,9 @@ pub struct CanvasState {
     pub context_menu_keyboard: bool,
     /// The context menu's first item still has to take the keyboard (#4977).
     pub context_menu_focus_first: bool,
+    /// An item of the menu opened from the keyboard opened a dialog, whose first control still has
+    /// to take the keyboard: the item that had it is gone (#4977).
+    pub dialog_focus_first: bool,
     /// The context menu's items in order, with the layer they're drawn on (the menu's, or a
     /// submenu's) and whether they're on, rebuilt each frame the menu is drawn.
     pub context_menu_items: Vec<(egui::LayerId, egui::Id, bool)>,
@@ -397,6 +400,7 @@ impl Default for CanvasState {
             context_menu_from_keys: false,
             context_menu_keyboard: false,
             context_menu_focus_first: false,
+            dialog_focus_first: false,
             context_menu_items: Vec::new(),
             context_menu_submenu_item: None,
             context_menu_at: None,
@@ -1277,10 +1281,17 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     // The standalone selection toolbar stands down while the context popup owns the pointer.
     app.canvas.context_menu_open = shown;
     // A menu that had the keyboard gives it back to the page as it closes, unless the item chosen
-    // opened a dialog, which takes it, or a click elsewhere closed it: what was clicked takes it
-    // (#4977).
-    if !shown && std::mem::take(&mut app.canvas.context_menu_keyboard) && app.dialog.is_none() && !clicked_outside {
-        app.canvas.want_focus = true;
+    // opened a dialog, whose first control takes it, or a click elsewhere closed it: what was
+    // clicked takes it (#4977).
+    if !shown && std::mem::take(&mut app.canvas.context_menu_keyboard) && !clicked_outside {
+        if app.dialog.is_some() {
+            // The Enter that chose the item would be the dialog's OK too: the dialog is drawn
+            // after the page, in this same frame.
+            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            app.canvas.dialog_focus_first = true;
+        } else {
+            app.canvas.want_focus = true;
+        }
     }
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
         ui.ctx().set_cursor_icon(c);
