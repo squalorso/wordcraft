@@ -51,7 +51,15 @@ fn keyboard(app: &mut WordApp, ui: &Ui) {
         return;
     }
     let Some((layer, focused)) = items.iter().copied().find(|(_, id)| ui.memory(|m| m.has_focus(*id))) else {
+        // Escape takes the focus away at the start of the pass: what the keyboard was in stays
+        // known for it (`context_menu_submenu_item`).
         return;
+    };
+    // In a submenu, the item that opens it: egui gives a submenu its item's id "with submenu".
+    app.canvas.context_menu_submenu_item = if layer == ui.layer_id() {
+        None
+    } else {
+        all.iter().map(|(_, id, _)| *id).find(|id| egui::containers::menu::SubMenu::id_from_widget_id(*id) == layer.id)
     };
     let level: Vec<egui::Id> = items.iter().filter(|(l, _)| *l == layer).map(|(_, id)| *id).collect();
     let Some(at) = level.iter().position(|id| *id == focused) else {

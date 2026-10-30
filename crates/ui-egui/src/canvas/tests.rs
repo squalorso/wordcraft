@@ -2542,6 +2542,59 @@ fn control_click_on_macos_opens_the_context_menu() {
 /// the focus; Down and Up go through the items, round from the last to the first, and End and
 /// Home to the last and the first, all without moving the caret behind it; the items are menu
 /// items to a screen reader; Escape closes the menu and the page has the keyboard again.
+/// #4977: from the keyboard, Right on a submenu's item opens the submenu and goes into it,
+/// Left comes back to the item, Enter goes in too, Escape closes only the submenu (the menu
+/// stays, its item has the keyboard), and Enter on a submenu's entry runs it, as in Word.
+#[test]
+fn the_context_menu_from_the_keyboard_enters_its_submenus() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = table_window();
+    let focused = |h: &H| h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default());
+    let key = |h: &mut H, key: egui::Key| {
+        h.key_press(key);
+        steps(h, 4);
+    };
+    let to_insert = |h: &mut H| {
+        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+        steps(h, 4);
+        for _ in 0..20 {
+            if focused(h).as_deref() == Some("Insert") {
+                break;
+            }
+            key(h, egui::Key::ArrowDown);
+        }
+        assert_eq!(focused(h).as_deref(), Some("Insert"), "Down reaches the Insert submenu's item");
+    };
+    let submenu_open = |h: &H| h.query_by_role_and_label(Role::MenuItem, "Insert Columns to the Left ").is_some();
+    to_insert(&mut h);
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Left "), "Right goes into the submenu");
+    key(&mut h, egui::Key::ArrowDown);
+    assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Right "), "Down moves in the submenu");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(focused(&h).as_deref(), Some("Insert"), "Left comes back to the submenu's item");
+    key(&mut h, egui::Key::Enter);
+    assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Left "), "Enter goes into the submenu too");
+    key(&mut h, egui::Key::Escape);
+    assert!(h.state().canvas.context_menu_open, "Escape in the submenu leaves the menu open");
+    assert!(!submenu_open(&h), "and closes the submenu");
+    assert_eq!(focused(&h).as_deref(), Some("Insert"), "its item has the keyboard");
+    key(&mut h, egui::Key::Escape);
+    assert!(!h.state().canvas.context_menu_open, "a second Escape closes the menu");
+    assert!(h.state().canvas.focused, "and the page has the keyboard again");
+
+    to_insert(&mut h);
+    key(&mut h, egui::Key::ArrowRight);
+    key(&mut h, egui::Key::ArrowDown);
+    let cols = |h: &H| h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.cols());
+    let before = cols(&h);
+    key(&mut h, egui::Key::Enter);
+    assert_eq!(cols(&h), before.map(|c| c + 1), "Enter on Insert Columns to the Right inserts a column");
+    assert!(!h.state().canvas.context_menu_open, "and closes the menu");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
+}
+
 #[test]
 fn the_context_menu_from_the_keyboard_gives_the_keyboard_back_where_it_belongs() {
     use egui::accesskit::Role;

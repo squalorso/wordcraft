@@ -174,6 +174,9 @@ pub struct CanvasState {
     /// The context menu's items in order, with the layer they're drawn on (the menu's, or a
     /// submenu's) and whether they're on, rebuilt each frame the menu is drawn.
     pub context_menu_items: Vec<(egui::LayerId, egui::Id, bool)>,
+    /// The item whose submenu has the keyboard: Escape closes that submenu only and goes back to
+    /// it, as in Word (#4977).
+    pub context_menu_submenu_item: Option<egui::Id>,
     /// Where the context menu stands: the right-click point, or below the caret.
     pub context_menu_at: Option<Pos2>,
     /// The frame drawn around the equation being edited, on screen (its options strip opens the
@@ -395,6 +398,7 @@ impl Default for CanvasState {
             context_menu_keyboard: false,
             context_menu_focus_first: false,
             context_menu_items: Vec::new(),
+            context_menu_submenu_item: None,
             context_menu_at: None,
             eq_options: None,
             mini_anchor: None,
@@ -1205,6 +1209,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         }
         app.canvas.context_menu_keyboard = from_keys;
         app.canvas.context_menu_focus_first = from_keys;
+        app.canvas.context_menu_submenu_item = None;
     }
     // Keep the parent independently of egui's one memory popup: the toolbar's font, size and
     // colour controls use that slot for their own lists (as in a collapsed ribbon group).
@@ -1251,8 +1256,23 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         }
     });
     // Escape closes the child list first; a second Escape closes the context menu.
-    if open && !shown && child_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if open && !shown && child_open && escape {
         shown = true;
+    }
+    // Escape in a submenu the keyboard is in closes that submenu only, as in Word: the menu stays,
+    // with the keyboard on the submenu's item (#4977).
+    if open
+        && !shown
+        && escape
+        && app.canvas.context_menu_keyboard
+        && let Some(item) = app.canvas.context_menu_submenu_item.take()
+    {
+        shown = true;
+        ui.memory_mut(|m| m.request_focus(item));
+    }
+    if !shown {
+        app.canvas.context_menu_submenu_item = None;
     }
     // The standalone selection toolbar stands down while the context popup owns the pointer.
     app.canvas.context_menu_open = shown;
