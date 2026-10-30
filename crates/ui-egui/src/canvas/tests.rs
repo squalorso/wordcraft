@@ -2571,6 +2571,11 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
         .collect();
     assert_eq!(items.first(), Some(&first), "the first enabled item has it");
     assert!(items.len() > 2, "the menu has several items: {items:?}");
+    // Each item knows its place, and the menu the number of items (those that are off too).
+    let all = h.query_all_by_role(Role::MenuItem).count();
+    let places: Vec<Option<usize>> = h.query_all_by_role(Role::MenuItem).map(|n| n.accesskit_node().position_in_set()).collect();
+    assert_eq!(places, (0..all).map(Some).collect::<Vec<_>>(), "the items are numbered in order");
+    assert_eq!(h.get_by_role(Role::Menu).accesskit_node().size_of_set(), Some(all), "the menu knows how many items it has");
     h.key_press(egui::Key::ArrowDown);
     run(&mut h);
     assert_eq!(focused(&h).as_ref(), items.get(1), "Down goes to the next item");

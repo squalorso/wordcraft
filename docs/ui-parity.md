@@ -86,7 +86,7 @@ Labels → New Document with “One label per recipient” includes all filtered
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-30 | trivial | Shift+F10's context menu takes the keyboard, as Word's does: its first enabled item has the focus, Up and Down go through the items (round from the last to the first, Home and End to the first and the last) without moving the caret behind it, Enter runs one, and Escape closes the menu and gives the keyboard back to the page. The items are menu items to screen readers. A right click still leaves the keyboard on the page (#4977) |
+| 2026-10-30 | trivial | Shift+F10's context menu takes the keyboard, as Word's does: its first enabled item has the focus, Up and Down go through the items (round from the last to the first, Home and End to the first and the last) without moving the caret behind it, Enter runs one, and Escape closes the menu and gives the keyboard back to the page. The items are menu items to screen readers, with their place in the menu ("2 of 10", items that are off counted, as in Word). A right click still leaves the keyboard on the page (#4977) |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-29 | trivial | Insert › Shapes lists the basic shapes as a grid of code-drawn icon tiles with accessible names and tooltips, as Word's gallery does, instead of a text list (#4349) |

@@ -171,9 +171,9 @@ pub struct CanvasState {
     pub context_menu_keyboard: bool,
     /// The context menu's first item still has to take the keyboard (#4977).
     pub context_menu_focus_first: bool,
-    /// The context menu's items that take the keyboard, in order, with the layer they're drawn
-    /// on (the menu's, or a submenu's), rebuilt each frame the menu is drawn.
-    pub context_menu_items: Vec<(egui::LayerId, egui::Id)>,
+    /// The context menu's items in order, with the layer they're drawn on (the menu's, or a
+    /// submenu's) and whether they're on, rebuilt each frame the menu is drawn.
+    pub context_menu_items: Vec<(egui::LayerId, egui::Id, bool)>,
     /// Where the context menu stands: the right-click point, or below the caret.
     pub context_menu_at: Option<Pos2>,
     /// The frame drawn around the equation being edited, on screen (its options strip opens the

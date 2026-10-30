@@ -11,8 +11,20 @@ pub(super) fn context_suggestions(app: &mut WordApp) {
 /// and key, and kept in the order the keyboard goes through (#4977).
 fn menu_item(app: &mut WordApp, resp: &egui::Response, name: &str) {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MenuItem, resp.enabled(), name));
-    if resp.enabled() {
-        app.canvas.context_menu_items.push((resp.layer_id, resp.id));
+    app.canvas.context_menu_items.push((resp.layer_id, resp.id, resp.enabled()));
+}
+
+/// Each item's place in the menu and the number of items, which screen readers say ("2 of 9")
+/// as in Word's menus; items that are off count too. The number goes on the menu: UI
+/// Automation takes it from the item's container.
+fn number_items(ui: &Ui, items: &[(egui::LayerId, egui::Id, bool)]) {
+    let here: Vec<egui::Id> = items.iter().filter(|(layer, _, _)| *layer == ui.layer_id()).map(|(_, id, _)| *id).collect();
+    let Some(menu) = ui.stack().iter().find(|s| s.kind() == Some(egui::UiKind::Menu)).map(|s| s.unique_id) else {
+        return;
+    };
+    ui.ctx().accesskit_node_builder(menu, |n| n.set_size_of_set(here.len()));
+    for (at, id) in here.iter().enumerate() {
+        ui.ctx().accesskit_node_builder(*id, |n| n.set_position_in_set(at));
     }
 }
 
@@ -21,7 +33,9 @@ fn menu_item(app: &mut WordApp, resp: &egui::Response, name: &str) {
 /// the first, Home and End to the first and the last, and Left and Right don't leave it. egui
 /// would move the focus to the nearest control in that direction, out of the menu (#4977).
 fn keyboard(app: &mut WordApp, ui: &Ui) {
-    let items = std::mem::take(&mut app.canvas.context_menu_items);
+    let all = std::mem::take(&mut app.canvas.context_menu_items);
+    number_items(ui, &all);
+    let items: Vec<(egui::LayerId, egui::Id)> = all.iter().filter(|(_, _, on)| *on).map(|(layer, id, _)| (*layer, *id)).collect();
     if app.canvas.context_menu_focus_first {
         // Not in the popup's sizing pass, where nothing takes the keyboard yet.
         if let Some((_, first)) = items.iter().find(|(layer, _)| *layer == ui.layer_id()).filter(|_| !ui.is_sizing_pass()) {
