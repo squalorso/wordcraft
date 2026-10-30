@@ -217,16 +217,20 @@ impl Build<'_> {
                     let start = self.s.text.len();
                     let mut cells = Vec::new();
                     for (r, row) in t.rows.iter().enumerate() {
+                        // The cell's grid column: a merged cell covers `span()` columns. Its path
+                        // stays its index in the row, which is how the document finds it.
+                        let mut col = 0usize;
                         for (c, cell) in row.cells.iter().enumerate() {
                             let mut p = path.clone();
                             p.push(u32::try_from(r).unwrap_or(u32::MAX));
                             p.push(u32::try_from(c).unwrap_or(u32::MAX));
                             let cs = self.s.text.len();
                             let children = self.blocks(&cell.blocks, &p);
-                            cells.push(Object { kind: ObjectKind::Cell { row: r, col: c }, range: cs..self.s.text.len(), children });
+                            cells.push(Object { kind: ObjectKind::Cell { row: r, col }, range: cs..self.s.text.len(), children });
+                            col = col.saturating_add(cell.span());
                         }
                     }
-                    let cols = t.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0);
+                    let cols = t.rows.iter().map(|r| r.cells.iter().map(|c| c.span()).fold(0usize, usize::saturating_add)).max().unwrap_or(0);
                     out.push(Object { kind: ObjectKind::Table { rows: t.rows.len(), cols }, range: start..self.s.text.len(), children: cells });
                 }
             }
@@ -564,6 +568,38 @@ mod tests {
         let (anchor, focus) = app.canvas.a11y.text.map.selection(cell.range.start, cell.range.end).expect("a selection");
         assert_eq!(anchor.path, focus.path);
         assert_eq!((anchor.off, focus.off), (0, "Cell A".len()));
+    }
+
+    /// CodeRabbit on #4951: a merged cell covers several grid columns, so the cells after it are
+    /// numbered by grid column and the table counts the grid's columns. Their text still maps
+    /// back to the document, which knows a cell by its place in the row.
+    #[test]
+    fn merged_cells_take_their_grid_columns() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "Intro"})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        app.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
+        for (i, t) in ["A1", "B1", "C1", "A2", "B2", "C2"].iter().enumerate() {
+            if i > 0 {
+                app.run("text.tab", json!({})).unwrap();
+            }
+            app.run("text.insert", json!({"text": t})).unwrap();
+        }
+        // A1 and B1 merged.
+        let at = |c: u32| serde_json::to_value(Pos::new(StoryRef::Body, Path(vec![1, 0, c, 0]), 0)).unwrap();
+        app.run("select.range", json!({"anchor": at(0), "focus": at(1)})).unwrap();
+        app.run("table.merge", json!({})).unwrap();
+        let (_, node) = document(&mut app, &egui::Context::default());
+        let doc = node.text_document().expect("the document as text");
+        let table = doc.objects.iter().find(|o| matches!(o.kind, ObjectKind::Table { .. })).expect("a table");
+        assert_eq!(table.kind, ObjectKind::Table { rows: 2, cols: 3 });
+        let cells: Vec<ObjectKind> = table.children.iter().map(|c| c.kind.clone()).collect();
+        let cell = |row, col| ObjectKind::Cell { row, col };
+        assert_eq!(cells, vec![cell(0, 0), cell(0, 2), cell(1, 0), cell(1, 1), cell(1, 2)]);
+        let c1 = table.children.get(1).expect("the cell after the merge");
+        assert_eq!(String::from_utf16_lossy(doc.text.get(c1.range.clone()).unwrap_or_default()), "C1\r");
+        let (anchor, _) = app.canvas.a11y.text.map.selection(c1.range.start, c1.range.start).expect("a position");
+        assert_eq!(anchor.path, Path(vec![1, 0, 1, 0]));
     }
 
     #[test]
