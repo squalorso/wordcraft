@@ -144,6 +144,45 @@ fn find_replace_and_go_to_are_one_dialog() {
     }
 }
 
+/// The dialogs `ui.dialog` opens on a document (with a table for the table dialogs).
+const DIALOG_NAMES: &str = "font paragraph asianTypography tabs borders pageBorders shading find replace goto insertTable pageSetup link bookmark wordCount zoom watermark phonetic newStyle manageStyles newTableStyle commands icons tableProperties tableCellMargins enclose pasteSpecial renameDocument about contributors models recipientList newRecipientList insertMergeField findRecipient mergeRecords printRecords fieldCode encryptPassword ruleIf ruleSkipIf matchFields checkErrors defineList trackChangesOptions customizeKeyboard customizeRibbon customizeQuickAccess noteOptions templates organizer customProperties columns symbol specialCharacters field insertSmartArt insertChart dropCap lineNumbers hyphenation manualHyphenation language envelopes labels tableFormula tableSort splitCells textToTable tableToText pageNumbers compare combine autoCorrect caption crossReference index markEntry toc tableOfFigures sourceManager createSource";
+
+/// Dialogs whose unnamed boxes open pull requests name, to come off this list as they land:
+/// Insert Table (#4982), Field and Encrypt with Password (#5070), Drop Cap and Line Numbers (#5078).
+const NAMED_IN_OPEN_PRS: [&str; 5] = ["insertTable", "fieldCode", "encryptPassword", "dropCap", "lineNumbers"];
+
+/// #3172: every control of every dialog has a name for screen readers, as Word's do. egui_kittest's
+/// accessibility check fails on a box, list or check box without one, as a dialog opens. Many had
+/// none: the label beside them was never linked to them (`labelled_by`), so NVDA said only "combo
+/// box" or "edit", in Borders and Shading, Insert Hyperlink, Footnote and Endnote, Track Changes
+/// Options, the mail merge rules, Envelopes and Labels, the table dialogs and others.
+#[test]
+fn every_dialog_names_its_controls() {
+    let mut problems = Vec::new();
+    for name in DIALOG_NAMES.split_whitespace().filter(|n| !NAMED_IN_OPEN_PRS.contains(n)) {
+        let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut app = app_with("Some words in a paragraph");
+            if name.starts_with("table") || name == "splitCells" {
+                app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+            }
+            let _ = app.run("ui.dialog", json!({"name": name}));
+            let opened = app.dialog.is_some();
+            let mut h = app_harness(app);
+            h.run_steps(4);
+            opened
+        }));
+        match opened {
+            Ok(true) => {}
+            Ok(false) => problems.push(format!("{name}: did not open")),
+            Err(e) => {
+                let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string())).unwrap_or_default();
+                problems.push(format!("{name}: {why}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
 fn app_with(text: &str) -> WordApp {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     let _ = app.run("document.setText", json!({"text": text}));
