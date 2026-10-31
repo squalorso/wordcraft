@@ -179,8 +179,10 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
     } else {
         Vec::new()
     };
-    // Whether Page or Bookmark has the keyboard: Enter there picks it, and goes nowhere.
+    // Whether Page or Bookmark has the keyboard, or the bookmark list is open: Enter there picks
+    // it, and goes nowhere.
     let mut on_a_kind = false;
+    let mut list_open = false;
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.label(tl!("Go to what:"));
@@ -198,10 +200,14 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
         ui.vertical(|ui| match what {
             GoToWhat::Page => {
                 let label = ui.label(tl!("Enter page number:"));
-                let r = ui.add(egui::TextEdit::singleline(target).desired_width(220.0)).labelled_by(label.id);
+                let id = ui.make_persistent_id("goto_page_box");
+                // Whether the box has the keyboard as this pass starts: an Enter then is its own,
+                // not one on the control Tab has just moved to.
+                let had_it = ui.memory(|m| m.has_focus(id));
+                let r = ui.add(egui::TextEdit::singleline(target).id(id).desired_width(220.0)).labelled_by(label.id);
                 // Enter goes to the page and keeps the keyboard here, as in Word, for the next
                 // number: a one-line box lets go of the keyboard on Enter (not on Tab, which moves on).
-                let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let entered = had_it && !r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if std::mem::take(focus) || entered {
                     r.request_focus();
                 }
@@ -209,16 +215,13 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
             }
             GoToWhat::Bookmark => {
                 let label = ui.label(tl!("Enter bookmark name:"));
-                let r = craft_ui::ComboBox::from_id_salt("goto_bookmark")
-                    .width(220.0)
-                    .selected_text(target.as_str())
-                    .show_ui(ui, |ui| {
-                        for b in &bookmarks {
-                            ui.selectable_value(target, b.clone(), b.as_str());
-                        }
-                    })
-                    .response
-                    .labelled_by(label.id);
+                let combo = craft_ui::ComboBox::from_id_salt("goto_bookmark").width(220.0).selected_text(target.as_str()).show_ui(ui, |ui| {
+                    for b in &bookmarks {
+                        ui.selectable_value(target, b.clone(), b.as_str());
+                    }
+                });
+                list_open = combo.inner.is_some();
+                let r = combo.response.labelled_by(label.id);
                 if std::mem::take(focus) {
                     r.request_focus();
                 }
@@ -243,7 +246,7 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
         let close_button = ui.button(tl!("Close"));
         // Enter is Next / Go To from anywhere but Previous and Close, which Enter presses: Enter
         // there went on a page, or closed the dialog after going.
-        let enter = enter && !on_a_kind && !close_button.has_focus() && !previous.as_ref().is_some_and(|b| b.has_focus());
+        let enter = enter && !on_a_kind && !list_open && !close_button.has_focus() && !previous.as_ref().is_some_and(|b| b.has_focus());
         if previous.is_some_and(|b| b.clicked()) {
             go = Some(json!({"pageBy": -1}));
         } else if next.clicked() || enter {

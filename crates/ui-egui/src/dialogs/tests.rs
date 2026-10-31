@@ -534,6 +534,56 @@ fn enter_in_the_go_to_page_box_keeps_the_keyboard_there() {
     }
 }
 
+/// Tab from Go To's page box to Previous and Enter in the very next pass press Previous: the box
+/// takes the keyboard back only after an Enter it had itself (egui still reports it lost the
+/// keyboard in the pass after Tab).
+#[test]
+fn tab_then_enter_at_once_in_go_to_presses_previous() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Page 1");
+    for i in 2..=3 {
+        app.run("insert.pageBreak", json!({})).unwrap();
+        app.run("text.insert", json!({"text": format!("Page {i}")})).unwrap();
+    }
+    app.dialog = Dialog::open("goto", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.key_press(egui::Key::Tab);
+    h.step();
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let s = &mut h.state_mut().session;
+    assert_eq!(s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1), Some(2), "Previous went back from page 3");
+    assert!(h.get_by_label("Previous").is_focused(), "and keeps the keyboard");
+}
+
+/// Enter on a bookmark in Go To's open list picks it and goes nowhere yet, as a click there does:
+/// the Enter was the list's, not Go To's.
+#[test]
+fn enter_in_go_to_bookmark_list_only_picks_it() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Start");
+    app.run("insert.pageBreak", json!({})).unwrap();
+    app.run("insert.bookmark", json!({"name": "Zulu"})).unwrap();
+    app.run("caret.docStart", json!({})).unwrap();
+    app.dialog = Dialog::open("goto", &mut app);
+    if let Some(Dialog::Find { goto_what, .. }) = &mut app.dialog {
+        *goto_what = GoToWhat::Bookmark;
+    }
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::ComboBox, "Enter bookmark name:").click();
+    h.run_steps(2);
+    h.get_by_label("Zulu").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Find { goto_target, .. }) if goto_target == "Zulu"), "Enter picked the bookmark");
+    let s = &mut h.state_mut().session;
+    assert_eq!(s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1), Some(1), "and went nowhere yet");
+}
+
 /// Word Count has one Close button, as Word's has: Close and Cancel did the same thing, and Tab
 /// went through both. Enter on Close closes it; Enter on the check box is the check box's.
 #[test]
