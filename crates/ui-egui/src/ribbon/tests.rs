@@ -660,6 +660,8 @@ fn picture_width_typed_in_pixels_keeps_the_proportions() {
     h.run_steps(4);
     let shown = h.get_by_role_and_label(Role::SpinButton, "W:").value().unwrap_or_default();
     assert!(shown.ends_with(" cm"), "the interface unit: {shown:?}");
+    // Named by its label, not by its unit ("°"), and the unit in its text.
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Rotation:").value().as_deref(), Some("0°"));
     h.get_by_role_and_label(Role::SpinButton, "W:").click();
     h.run_steps(2);
     // Editing, the field is still a spin button, with its unit still in the text to type over.

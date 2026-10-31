@@ -140,7 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-10-31: Number boxes say their unit (#3172): a length or points box wrote its unit as an egui suffix, which shows only until the box is edited, and a box that has the keyboard is edited, so NVDA said "0,0" on Tab where Word says "0 cm". The unit is in the text now, with only the decimals needed and the region's separator (line spacing's Multiple "1,15", where it showed "1.158"). The suffix was also the box's name for screen readers ("cm"): Table Properties, Cell Margins, Columns, Drop Cap, Line Numbers, Hyphenation, Define New Multilevel List and the ribbon's Layout, Table, Picture and Shape boxes are named by their labels.
+- 2026-10-31: Number boxes say their unit (#3172): a length or points box wrote its unit as an egui suffix, which shows only until the box is edited, and a box that has the keyboard is edited, so NVDA said "0,0" on Tab where Word says "0 cm". The unit is in the text now, with only the decimals needed and the region's separator (line spacing's Multiple "1,15", where it showed "1.158"). The suffix was also the box's name for screen readers ("cm"): Table Properties, Cell Margins, Columns, Drop Cap, Line Numbers, Hyphenation, Define New Multilevel List and the ribbon's Layout, Table, Picture and Shape boxes are named by their labels; percent and degree boxes (Rotation, Transparency, Crop, the gradient's Angle and Position) too, with their sign in the text.
 
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 

@@ -93,6 +93,8 @@ pub trait MeasureExt {
     fn points(self) -> Self;
     /// A plain number (line spacing's Multiple, `1,16`), with the region's decimal separator.
     fn region_number(self) -> Self;
+    /// A number followed by `unit` in its text (`50%`, `90°`), read with either separator.
+    fn unit_text(self, unit: &str) -> Self;
 }
 
 /// A number box's text, as Word's boxes write it: the number with the region's decimal separator
@@ -120,7 +122,15 @@ impl MeasureExt for egui::DragValue<'_> {
         self.measure(Unit::Points)
     }
     fn region_number(self) -> Self {
-        with_unit_in_text(self, String::new()).custom_parser(|text| text.trim().replace(',', ".").parse().ok())
+        self.unit_text("")
+    }
+    fn unit_text(self, unit: &str) -> Self {
+        let sign = unit.trim().to_string();
+        with_unit_in_text(self, unit.to_string()).custom_parser(move |text| {
+            let text = text.trim();
+            let number = if sign.is_empty() { text } else { text.strip_suffix(sign.as_str()).unwrap_or(text) };
+            number.trim().replace(',', ".").parse().ok()
+        })
     }
 }
 
