@@ -81,28 +81,46 @@ pub(crate) fn sync(app: &WordApp) {
     DECIMAL.set(app.session.region().decimal());
 }
 
-/// A length field: the unit's suffix, and numbers written and read with the region's decimal
-/// separator (`2,54 cm`). Typing either separator works, and so does another unit (`1 in` in a
-/// centimetre field).
+/// A length field: numbers written and read with the region's decimal separator and the unit
+/// (`2,54 cm`). Typing either separator works, and so does another unit (`1 in` in a centimetre
+/// field).
 pub trait MeasureExt {
     fn measure(self, unit: Unit) -> Self;
     /// The same field showing nothing, not even the unit, until a length is typed in: a value
     /// the selected paragraphs differ in.
     fn measure_blank(self, unit: Unit) -> Self;
+    /// A field in points (`8 pt`), read as [`MeasureExt::measure`] reads a length.
+    fn points(self) -> Self;
+    /// A plain number (line spacing's Multiple, `1,16`), with the region's decimal separator.
+    fn region_number(self) -> Self;
+}
+
+/// A number box's text, as Word's boxes write it: the number with the region's decimal separator
+/// and only the decimals it needs, then `unit` ("0 cm", "1,25 cm", "8 pt"). The unit is in the
+/// text, not an egui suffix: a suffix shows only until the box is edited, and a box that has the
+/// keyboard is being edited, so a screen reader landing on one with Tab heard the bare number
+/// ("0,0" for 0 cm).
+fn with_unit_in_text(field: egui::DragValue<'_>, unit: String) -> egui::DragValue<'_> {
+    let sep = decimal();
+    field.custom_formatter(move |n, decimals| {
+        let s = egui::emath::format_with_decimals_in_range(n, 0..=*decimals.end());
+        let s = if sep == '.' { s } else { s.replace('.', &sep.to_string()) };
+        format!("{s}{unit}")
+    })
 }
 
 impl MeasureExt for egui::DragValue<'_> {
     fn measure(self, unit: Unit) -> Self {
-        let sep = decimal();
-        self.suffix(unit_suffix(unit))
-            .custom_formatter(move |n, decimals| {
-                let s = egui::emath::format_with_decimals_in_range(n, decimals);
-                if sep == '.' { s } else { s.replace('.', &sep.to_string()) }
-            })
-            .custom_parser(move |text| parse_length(text, unit))
+        with_unit_in_text(self, unit_suffix(unit)).custom_parser(move |text| parse_length(text, unit))
     }
     fn measure_blank(self, unit: Unit) -> Self {
         self.custom_formatter(|_, _| String::new()).custom_parser(move |text| parse_length(text, unit))
+    }
+    fn points(self) -> Self {
+        self.measure(Unit::Points)
+    }
+    fn region_number(self) -> Self {
+        with_unit_in_text(self, String::new()).custom_parser(|text| text.trim().replace(',', ".").parse().ok())
     }
 }
 

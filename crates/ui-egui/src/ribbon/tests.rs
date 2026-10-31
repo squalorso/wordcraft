@@ -662,9 +662,9 @@ fn picture_width_typed_in_pixels_keeps_the_proportions() {
     assert!(shown.ends_with(" cm"), "the interface unit: {shown:?}");
     h.get_by_role_and_label(Role::SpinButton, "W:").click();
     h.run_steps(2);
-    // Editing, the field is still a spin button, now showing the bare number to type over.
+    // Editing, the field is still a spin button, with its unit still in the text to type over.
     let editing = h.get_by_role_and_label(Role::SpinButton, "W:");
-    assert!(editing.is_focused() && editing.value().is_some_and(|v| !v.ends_with(" cm")), "a click starts typing");
+    assert!(editing.is_focused() && editing.value().is_some_and(|v| v.ends_with(" cm")), "a click starts typing");
     editing.type_text("300 px");
     h.run_steps(2);
     assert_eq!(size(h.state()), Some((15.0, 7.5)), "nothing applies while typing");
