@@ -261,7 +261,11 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                 ui.add_sized([CELL_W, ROW_H - 4.0], egui::Label::new(egui::RichText::new(tl!("Categories")).strong()));
                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                 for (j, n) in f.names.iter_mut().enumerate() {
-                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(n).hint_text(tl!("Series name")));
+                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(n).hint_text(tl!("Series name"))).accessible_name(format!(
+                        "{} {}",
+                        tl!("Series name"),
+                        j + 1
+                    ));
                     let x = ui
                         .add_enabled_ui(can_remove_series, |ui| ui.add_sized([X_W, ROW_H - 4.0], egui::Button::new("×")))
                         .inner
@@ -272,12 +276,26 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                 }
             });
             ui.separator();
+            // A screen reader names each box by its place in the grid, as a spreadsheet's cells:
+            // a category by its row, a value by its category and series.
+            let series: Vec<String> = f
+                .names
+                .iter()
+                .enumerate()
+                .map(|(j, n)| if n.trim().is_empty() { format!("{} {}", tl!("Series name"), j + 1) } else { n.clone() })
+                .collect();
             let rows = f.categories.len();
             egui::ScrollArea::vertical().id_salt("chart_data_v").max_height(280.0).show_rows(ui, ROW_H, rows, |ui, range| {
                 for i in range {
                     ui.horizontal(|ui| {
+                        let category =
+                            f.categories.get(i).filter(|c| !c.trim().is_empty()).cloned().unwrap_or_else(|| format!("{} {}", tl!("Category"), i + 1));
                         if let Some(c) = f.categories.get_mut(i) {
-                            ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c));
+                            ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c)).accessible_name(format!(
+                                "{} {}",
+                                tl!("Category"),
+                                i + 1
+                            ));
                         }
                         let x = ui
                             .add_enabled_ui(can_remove_row, |ui| ui.add_sized([X_W, ROW_H - 4.0], egui::Button::new("×")))
@@ -287,8 +305,9 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                             remove_row = Some(i);
                         }
                         if let Some(row) = f.cells.get_mut(i) {
-                            for cell in row.iter_mut() {
-                                ui.add_sized([CELL_W, ROW_H - 4.0], value_cell(cell));
+                            for (j, cell) in row.iter_mut().enumerate() {
+                                let name = format!("{category}, {}", series.get(j).map_or("", String::as_str));
+                                ui.add_sized([CELL_W, ROW_H - 4.0], value_cell(cell)).accessible_name(name);
                                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                             }
                         }
