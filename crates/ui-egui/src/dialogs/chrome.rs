@@ -40,6 +40,11 @@ fn dialog_top_key() -> egui::Id {
     egui::Id::unique("dialog_top")
 }
 
+/// The control a dialog that has just opened gives the keyboard to, in its next frame.
+fn first_control_key() -> egui::Id {
+    egui::Id::unique("dialog_first_control")
+}
+
 /// Frames a dialog stays centred: the first one measures it, the second centres that size.
 const DIALOG_CENTRED_FRAMES: u8 = 2;
 
@@ -72,7 +77,10 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
 /// alert-dialog role.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else {
-        ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
+        ctx.data_mut(|d| {
+            d.remove::<(egui::Id, u8)>(dialog_top_key());
+            d.remove::<egui::Id>(first_control_key());
+        });
         app.canvas.dialog_focus_first = false;
         return;
     };
@@ -140,6 +148,17 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     if ctx.data(|d| d.get_temp::<(egui::Id, u8)>(dialog_top_key())).is_none_or(|(open, _)| open != id) {
         app.canvas.dialog_focus_first = true;
     }
+    // The control picked in the last frame takes the keyboard before the body is drawn, so it sees
+    // itself gain it: a number box (Insert Table's Number of columns) then selects its value, and
+    // typing replaces it, as in Word.
+    let first = ctx.data_mut(|d| {
+        let first = d.get_temp::<egui::Id>(first_control_key());
+        d.remove::<egui::Id>(first_control_key());
+        first
+    });
+    if let Some(first) = first {
+        ctx.memory_mut(|m| m.request_focus(first));
+    }
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
     let mut body_rect = None;
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
@@ -181,7 +200,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
 
 /// Gives the keyboard to the first control in a dialog's body (`body`, on the window's `layer`),
 /// as Word's dialogs do when they open, unless one of the dialog's own controls took it already.
-/// False while the window has no control to give it to yet (its sizing pass draws them hidden).
+/// The page lets go of it now and the control takes it before it is next drawn (`show`): given
+/// after its drawing, it never saw itself gain the keyboard. False while the window has no
+/// control to give it to yet (its sizing pass draws them hidden).
 fn focus_first_control(ctx: &egui::Context, layer: egui::LayerId, body: egui::Rect) -> bool {
     let focused = ctx.memory(|m| m.focused());
     let (taken, first) = ctx.viewport(|v| {
@@ -194,7 +215,10 @@ fn focus_first_control(ctx: &egui::Context, layer: egui::LayerId, body: egui::Re
         return true;
     }
     let Some(first) = first else { return false };
-    ctx.memory_mut(|m| m.request_focus(first));
+    if let Some(page) = focused {
+        ctx.memory_mut(|m| m.surrender_focus(page));
+    }
+    ctx.data_mut(|d| d.insert_temp(first_control_key(), first));
     true
 }
 
@@ -227,7 +251,9 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
             if cancelb.clicked() || (keys && cancel_key_pressed(ui)) {
                 r.1 = true;
             }
-            if okb.clicked() || (keys && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+            // Enter is OK from anywhere in the dialog but Cancel, which Enter presses, as in Word:
+            // a dialog with the keyboard in it is now reached with Tab (#4977).
+            if okb.clicked() || (keys && !cancelb.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                 r.0 = true;
             }
         });

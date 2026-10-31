@@ -2878,6 +2878,68 @@ fn a_dialog_opened_from_the_keyboard_takes_the_keyboard() {
     assert!(h.state().canvas.focused, "and the page has the keyboard again");
 }
 
+/// The app with `text` on the page, which has the keyboard, in a harness of a desktop window.
+fn page_with_keyboard(text: &str) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": text})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    h
+}
+
+/// #4977: the first control of a dialog that has just opened sees itself gain the keyboard, so a
+/// number box selects its value and typing replaces it, as in Word: Insert Table's Number of
+/// columns took a typed 3 after its 5 (53). Enter is then OK, but Enter on Cancel cancels: it was
+/// OK too, so Insert Table inserted the table it was told not to.
+#[test]
+fn a_dialog_number_box_that_takes_the_keyboard_replaces_its_value() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = page_with_keyboard("Lanterns");
+    let open = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        let d = crate::dialogs::Dialog::open("insertTable", h.state_mut());
+        h.state_mut().dialog = d;
+        h.run_steps(4);
+    };
+    open(&mut h);
+    h.key_press(egui::Key::Num3);
+    h.event(egui::Event::Text("3".into()));
+    h.run_steps(2);
+    assert!(
+        matches!(h.state().dialog, Some(crate::dialogs::Dialog::InsertTable { cols: 3, .. })),
+        "the typed 3 replaces the 5 columns: {:?}",
+        h.state().dialog
+    );
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let tables = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.body.iter().filter(|b| b.as_table().is_some()).count();
+    assert!(h.state().dialog.is_none(), "Enter in the box is OK");
+    assert_eq!(tables(&h), 1, "and inserts the table");
+
+    open(&mut h);
+    for _ in 0..6 {
+        if h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label()).as_deref() == Some("Cancel") {
+            break;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    assert_eq!(h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label()).as_deref(), Some("Cancel"), "Tab reaches Cancel");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "Enter on Cancel closes the dialog");
+    assert_eq!(tables(&h), 1, "and inserts no table");
+}
+
 /// #3340: review.spelling (the Review tab's Spelling & Grammar button and the Home tab's
 /// Editor button both run it) only moved the selection to the next issue — with no way to see
 /// or apply a suggestion from there, just the generic selection toolbar, it looked broken.

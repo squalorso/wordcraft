@@ -1231,6 +1231,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         open = false;
     }
     let child_open = egui::Popup::is_any_open(ui.ctx());
+    let dialog_before = app.dialog.as_ref().map(|d| d.name());
     let mut shown = open;
     if open {
         app.escape_free = false;
@@ -1282,9 +1283,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     app.canvas.context_menu_open = shown;
     // A menu that had the keyboard gives it back to the page as it closes, unless the item chosen
     // opened a dialog, whose first control takes it, or a click elsewhere closed it: what was
-    // clicked takes it (#4977).
+    // clicked takes it (#4977). A dialog that was open before the menu takes nothing.
     if !shown && std::mem::take(&mut app.canvas.context_menu_keyboard) && !clicked_outside {
-        if app.dialog.is_some() {
+        if app.dialog.is_some() && app.dialog.as_ref().map(|d| d.name()) != dialog_before {
             // The Enter that chose the item would be the dialog's OK too: the dialog is drawn
             // after the page, in this same frame.
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
