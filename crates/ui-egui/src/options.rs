@@ -62,12 +62,16 @@ pub fn unit_suffix(unit: Unit) -> String {
 /// another unit (`1 in` in a centimetre field), and the units' names in the interface language
 /// as well as in English (`3 см`).
 pub fn parse_length(text: &str, unit: Unit) -> Option<f64> {
-    let mut text: String = text.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
-    // The box's own unit is in its text, and an edit may land after it ("2,54 cm0").
+    let text: String = text.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+    // The box's own unit is in its text, and an edit may land after it ("2,54 cm0"): taken out
+    // only when the text doesn't read as it is, so a longer name of a unit ("2 picas") stays whole.
     let own = unit_suffix(unit).trim().to_lowercase();
-    if !own.is_empty() {
-        text = text.replacen(own.as_str(), "", 1);
-    }
+    parse_named(text.clone(), unit).or_else(|| (!own.is_empty()).then(|| parse_named(text.replacen(own.as_str(), "", 1), unit)).flatten())
+}
+
+/// [`parse_length`] of text without spaces, lower case: the units' names in the interface
+/// language read as their English ones.
+fn parse_named(mut text: String, unit: Unit) -> Option<f64> {
     for (english, translated) in [("cm", tl!("cm")), ("mm", tl!("mm")), ("pt", tl!("pt")), ("pi", tl!("pi"))] {
         let translated = translated.to_lowercase();
         if translated != english

@@ -488,6 +488,8 @@ fn number_box_text_parses_around_its_unit() {
     assert_eq!(cm("2,5 cm4"), Some(2.54));
     assert_eq!(cm("10 mm"), Some(1.0), "another unit still converts");
     assert_eq!(parse_length("12 pt", Unit::Points), Some(12.0));
+    assert_eq!(parse_length("12 pts", Unit::Points), Some(12.0), "a longer name of the unit stays whole");
+    assert_eq!(parse_length("2 picas", Unit::Picas), Some(2.0));
     assert_eq!(parse_with_sign("9°0", "°"), Some(90.0), "a digit after the sign");
     assert_eq!(parse_with_sign("9°", "°"), Some(9.0));
     assert_eq!(parse_with_sign("50 %", "%"), Some(50.0));
