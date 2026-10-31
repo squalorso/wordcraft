@@ -278,18 +278,13 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
             ui.separator();
             // A screen reader names each box by its place in the grid, as a spreadsheet's cells:
             // a category by its row, a value by its category and series.
-            let series: Vec<String> = f
-                .names
-                .iter()
-                .enumerate()
-                .map(|(j, n)| if n.trim().is_empty() { format!("{} {}", tl!("Series name"), j + 1) } else { n.clone() })
-                .collect();
+            let series = grid_headers(&f.names, tl!("Series name"), tl!("Series"));
+            let categories = grid_headers(&f.categories, tl!("Category"), tl!("Category"));
             let rows = f.categories.len();
             egui::ScrollArea::vertical().id_salt("chart_data_v").max_height(280.0).show_rows(ui, ROW_H, rows, |ui, range| {
                 for i in range {
                     ui.horizontal(|ui| {
-                        let category =
-                            f.categories.get(i).filter(|c| !c.trim().is_empty()).cloned().unwrap_or_else(|| format!("{} {}", tl!("Category"), i + 1));
+                        let category = categories.get(i).map_or("", String::as_str);
                         if let Some(c) = f.categories.get_mut(i) {
                             ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c)).accessible_name(format!(
                                 "{} {}",
@@ -354,6 +349,26 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
             false
         }
     }
+}
+
+/// The names a screen reader hears for a row or column of the Edit Data grid: each header's text,
+/// `blank` and its number when empty ("Category 2"), and `numbered` with its number after a
+/// text another header has too ("Q1 (Category 3)"), so no two value cells share a name.
+fn grid_headers(texts: &[String], blank: &str, numbered: &str) -> Vec<String> {
+    texts
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let text = text.trim();
+            if text.is_empty() {
+                format!("{blank} {}", i + 1)
+            } else if texts.iter().filter(|t| t.trim() == text).count() > 1 {
+                format!("{text} ({numbered} {})", i + 1)
+            } else {
+                text.to_string()
+            }
+        })
+        .collect()
 }
 
 /// A numeric chart-data cell. `RIGHT_TOP` preserves the old deprecated
@@ -421,5 +436,15 @@ mod tests {
         for name in [category, series] {
             assert!(!name.chars().any(|c| ('\u{2066}'..='\u{2069}').contains(&c)), "{name:?}");
         }
+    }
+
+    /// #3172: Edit Data's boxes are named by their row and column; a header text two rows (or two
+    /// series) share gets its number, so no two value cells have one name.
+    #[test]
+    fn grid_headers_never_repeat_a_name() {
+        let texts = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        assert_eq!(grid_headers(&texts(&["Q1", "", "Q2"]), "Category", "Category"), ["Q1", "Category 2", "Q2"]);
+        assert_eq!(grid_headers(&texts(&["Q1", "Q2", " Q1 "]), "Category", "Category"), ["Q1 (Category 1)", "Q2", "Q1 (Category 3)"]);
+        assert_eq!(grid_headers(&texts(&["Sales", "Sales"]), "Series name", "Series"), ["Sales (Series 1)", "Sales (Series 2)"]);
     }
 }

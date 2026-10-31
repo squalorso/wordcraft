@@ -172,6 +172,9 @@ fn every_dialog_names_its_controls() {
             let opened = app.dialog.is_some();
             let mut h = app_harness(app);
             h.run_steps(4);
+            // `run_steps` doesn't check; building the harness does, but before the dialog's last
+            // frames.
+            h.check_accessibility();
             opened
         }));
         match opened {
@@ -366,10 +369,19 @@ fn dialogs_behind_a_selection_or_another_dialog_name_their_controls() {
                 h.get_by_label(label).click();
                 h.run_steps(4);
             }
-            // The click reached the dialog under test, not only its parent.
+            // Building the harness checked the dialog as it opened; this checks what the clicks
+            // reached (`run_steps` doesn't check).
+            h.check_accessibility();
+            // The click reached the dialog and the tab under test, not only its parent.
             let want = r.name.split(" ›").next().unwrap_or_default();
             let shown = h.state().dialog.as_ref().map(Dialog::name).or(h.state().colors.as_ref().map(|_| "colors"));
-            opened && shown == Some(want)
+            let tab = match r.name {
+                "paragraph › Line and Page Breaks" => matches!(h.state().dialog, Some(Dialog::Paragraph { tab: 1, .. })),
+                "colors › Standard" => h.state().colors.as_ref().is_some_and(|c| c.tab == crate::colors::ColorsTab::Standard),
+                "colors › Custom" => h.state().colors.as_ref().is_some_and(|c| c.tab == crate::colors::ColorsTab::Custom),
+                _ => true,
+            };
+            opened && shown == Some(want) && tab
         }));
         match opened {
             Ok(true) => {}
