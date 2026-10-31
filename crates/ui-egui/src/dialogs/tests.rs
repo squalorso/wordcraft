@@ -512,6 +512,29 @@ fn paragraph_dialog_sets_a_mixed_check_box_for_all() {
     assert_eq!(p[0].line_spacing, Some(wordcraft_doc::props::LineSpacing::Multiple(6.0)), "line spacing untouched");
 }
 
+/// #3172: a blank box (the selected paragraphs differ in it) reads what is typed as the box it
+/// stands for does: "1,5" in the line spacing, with the region's decimal comma, where the blank box
+/// had egui's plain parser and refused it.
+#[test]
+fn a_blank_paragraph_box_reads_a_typed_number_as_the_box_does() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = mixed_selection();
+    app.run("file.options", json!({"region": "it-IT"})).unwrap();
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    const SPACING: &str = "Line spacing:";
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, SPACING).value().as_deref(), Some(""), "blank: the paragraphs differ");
+    h.get_by_role_and_label(Role::SpinButton, SPACING).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::SpinButton, SPACING).type_text("1,5");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, SPACING).value().as_deref(), Some("1,5"), "taken, for every paragraph");
+}
+
 #[test]
 fn paragraph_dialog_sets_only_the_options_that_changed() {
     // #512: mirror indents, same-style spacing, suppress line numbers, don't hyphenate.

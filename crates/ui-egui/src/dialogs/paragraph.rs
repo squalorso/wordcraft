@@ -75,7 +75,9 @@ pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &
     let field = match kind {
         ParaNumber::Length if blank => field.measure_blank(unit),
         ParaNumber::Length => field.measure(unit),
-        _ if blank => field.custom_formatter(|_, _| String::new()),
+        // Blank, with the parser of the box it stands for (a typed "1,5" reads as it does there).
+        ParaNumber::Points if blank => field.points().custom_formatter(|_, _| String::new()),
+        ParaNumber::Lines if blank => field.region_number().custom_formatter(|_, _| String::new()),
         ParaNumber::Points => field.points(),
         ParaNumber::Lines => field.region_number(),
     };

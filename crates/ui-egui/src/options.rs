@@ -63,6 +63,11 @@ pub fn unit_suffix(unit: Unit) -> String {
 /// as well as in English (`3 см`).
 pub fn parse_length(text: &str, unit: Unit) -> Option<f64> {
     let mut text: String = text.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+    // The box's own unit is in its text, and an edit may land after it ("2,54 cm0").
+    let own = unit_suffix(unit).trim().to_lowercase();
+    if !own.is_empty() {
+        text = text.replacen(own.as_str(), "", 1);
+    }
     for (english, translated) in [("cm", tl!("cm")), ("mm", tl!("mm")), ("pt", tl!("pt")), ("pi", tl!("pi"))] {
         let translated = translated.to_lowercase();
         if translated != english
@@ -111,6 +116,13 @@ fn with_unit_in_text(field: egui::DragValue<'_>, unit: String) -> egui::DragValu
     })
 }
 
+/// A number typed into a box whose text ends with `sign` (`%`, `°`, or none): the sign taken out
+/// wherever the edit left it ("9°0" is 90), either decimal separator.
+fn parse_with_sign(text: &str, sign: &str) -> Option<f64> {
+    let number = if sign.is_empty() { text.to_string() } else { text.replacen(sign, "", 1) };
+    number.trim().replace(',', ".").parse().ok()
+}
+
 impl MeasureExt for egui::DragValue<'_> {
     fn measure(self, unit: Unit) -> Self {
         with_unit_in_text(self, unit_suffix(unit)).custom_parser(move |text| parse_length(text, unit))
@@ -126,11 +138,7 @@ impl MeasureExt for egui::DragValue<'_> {
     }
     fn unit_text(self, unit: &str) -> Self {
         let sign = unit.trim().to_string();
-        with_unit_in_text(self, unit.to_string()).custom_parser(move |text| {
-            let text = text.trim();
-            let number = if sign.is_empty() { text } else { text.strip_suffix(sign.as_str()).unwrap_or(text) };
-            number.trim().replace(',', ".").parse().ok()
-        })
+        with_unit_in_text(self, unit.to_string()).custom_parser(move |text| parse_with_sign(text, &sign))
     }
 }
 
