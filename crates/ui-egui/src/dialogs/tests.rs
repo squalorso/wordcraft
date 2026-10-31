@@ -145,7 +145,7 @@ fn find_replace_and_go_to_are_one_dialog() {
 }
 
 /// The dialogs `ui.dialog` opens on a document (with a table for the table dialogs).
-const DIALOG_NAMES: &str = "font paragraph asianTypography tabs borders pageBorders shading find replace goto insertTable pageSetup link bookmark wordCount zoom watermark phonetic newStyle manageStyles newTableStyle commands icons tableProperties tableCellMargins enclose pasteSpecial renameDocument about contributors models recipientList newRecipientList insertMergeField findRecipient mergeRecords printRecords fieldCode encryptPassword ruleIf ruleSkipIf matchFields checkErrors defineList trackChangesOptions customizeKeyboard customizeRibbon customizeQuickAccess noteOptions templates organizer customProperties columns symbol specialCharacters field insertSmartArt insertChart dropCap lineNumbers hyphenation manualHyphenation language envelopes labels tableFormula tableSort splitCells textToTable tableToText pageNumbers compare combine autoCorrect caption crossReference index markEntry toc tableOfFigures sourceManager createSource";
+const DIALOG_NAMES: &str = "font paragraph asianTypography tabs borders pageBorders shading find replace goto insertTable pageSetup link bookmark wordCount zoom watermark phonetic newStyle manageStyles newTableStyle commands icons tableProperties tableCellMargins enclose pasteSpecial renameDocument about contributors models recipientList newRecipientList insertMergeField findRecipient mergeRecords printRecords fieldCode encryptPassword ruleIf ruleSkipIf matchFields checkErrors defineList trackChangesOptions customizeKeyboard customizeRibbon customizeQuickAccess noteOptions templates organizer customProperties columns symbol specialCharacters field insertSmartArt insertChart dropCap lineNumbers hyphenation manualHyphenation language envelopes labels tableFormula tableSort splitCells textToTable tableToText pageNumbers compare combine autoCorrect caption crossReference index markEntry toc tableOfFigures sourceManager createSource macros";
 
 /// Dialogs whose unnamed boxes open pull requests name, to come off this list as they land:
 /// Insert Table (#4982), Field, Edit Field Code, Encrypt with Password and Password (#5070), Drop
@@ -153,9 +153,9 @@ const DIALOG_NAMES: &str = "font paragraph asianTypography tabs borders pageBord
 const NAMED_IN_OPEN_PRS: [&str; 7] = ["insertTable", "fieldCode", "editFieldCode", "encryptPassword", "password", "dropCap", "lineNumbers"];
 
 /// #3172: every control of the dialogs in [`DIALOG_NAMES`] has a name for screen readers, as Word's
-/// do, as each dialog first appears (first tab, no selection; other tabs and the dialogs that open
-/// only on a selected object are not reached yet). egui_kittest's accessibility check fails on a
-/// box, list or check box without one, as a dialog opens. Many had
+/// do, as each dialog first appears (first tab, no selection; [`REACHED`] has the rest).
+/// egui_kittest's accessibility check fails on a box, list or check box without one, as a dialog
+/// opens. Many had
 /// none: the label beside them was never linked to them (`labelled_by`), so NVDA said only "combo
 /// box" or "edit", in Borders and Shading, Insert Hyperlink, Footnote and Endnote, Track Changes
 /// Options, the mail merge rules, Envelopes and Labels, the table dialogs and others.
@@ -402,6 +402,67 @@ fn icon_tiles_are_named_by_their_icons() {
         Some(egui::accesskit::Toggled::True),
         "the picked tile"
     );
+}
+
+/// #4327: View › Macros opens a dialog that runs, deletes and records macros; the command with
+/// a name to run or delete (what scripts send) still acts without one.
+#[test]
+fn the_macros_button_opens_a_dialog_that_runs_deletes_and_records() {
+    fn press(h: &mut egui_kittest::Harness<'_, WordApp>, label: &str) {
+        use egui_kittest::kittest::Queryable;
+        let dialog = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Macros")))).expect("the dialog is open");
+        h.query_all_by_label(label).find(|n| dialog.contains(n.rect().center())).expect(label).click();
+        for _ in 0..3 {
+            h.step();
+        }
+    }
+    let mut app = app_with("Start");
+    for name in ["Greet", "Spare"] {
+        app.run("tools.macros", json!({"define": {"name": name, "steps": [{"command": "text.insert", "params": {"text": name}}]}})).unwrap();
+    }
+    assert!(app.dialog.is_none(), "defining a macro opens nothing");
+    assert_eq!(app.run("tools.macros", json!({})).unwrap(), json!({"pending": "macros"}));
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Macros { .. })));
+
+    press(&mut h, "Spare");
+    press(&mut h, "Delete");
+    let names: Vec<&String> = h.state().session.macros.keys().collect();
+    assert_eq!(names, ["Greet"]);
+    assert!(h.state().dialog.is_some(), "Delete leaves the dialog open");
+
+    press(&mut h, "Greet");
+    press(&mut h, "Run");
+    assert!(h.state().dialog.is_none());
+    assert!(body_of(h.state()).contains("Greet"), "the macro ran");
+
+    // A macro whose name has spaces around it (only a script can make one) runs by its exact name.
+    h.state_mut()
+        .run("tools.macros", json!({"define": {"name": " Pad ", "steps": [{"command": "text.insert", "params": {"text": "Padded"}}]}}))
+        .unwrap();
+    h.state_mut().dialog = Dialog::open("macros", h.state_mut());
+    if let Some(Dialog::Macros { name }) = &mut h.state_mut().dialog {
+        *name = " Pad ".into();
+    }
+    h.run_steps(3);
+    press(&mut h, "Run");
+    assert!(h.state().dialog.is_none());
+    assert!(body_of(h.state()).contains("Padded"), "the macro with spaces in its name ran");
+
+    // Record starts a recording under the typed name; the dialog then offers to stop it.
+    h.state_mut().dialog = Dialog::open("macros", h.state_mut());
+    if let Some(Dialog::Macros { name }) = &mut h.state_mut().dialog {
+        *name = "Fresh".into();
+    }
+    h.run_steps(3);
+    press(&mut h, "Record…");
+    assert_eq!(h.state().session.recording.as_ref().map(|(n, _)| n.as_str()), Some("Fresh"));
+    assert!(h.state().dialog.is_none());
+}
+
+fn body_of(app: &WordApp) -> String {
+    app.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
 }
 
 fn app_with(text: &str) -> WordApp {
