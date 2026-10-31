@@ -1,5 +1,5 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body};
-use super::chrome::{buttons, color_field};
+use super::chrome::{buttons, close_button, color_field, focus_when_shown};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
 use super::font::{apply_font, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
@@ -360,7 +360,7 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     ui.add_space(6.0);
     if *tab == FindTab::GoTo {
-        return goto_body(app, ui, goto_what, goto_target, message);
+        return goto_body(app, ui, goto_what, goto_target, message, focus);
     }
     let replace_mode = *tab == FindTab::Replace;
     ui.horizontal(|ui| {
@@ -781,8 +781,8 @@ fn word_count_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     {
         *stats = v;
     }
-    let (ok, cancel) = buttons(ui, tl!("Close"));
-    ok || cancel
+    // One Close button, as Word's: Close and Cancel did the same, and Tab went through both.
+    close_button(ui) || ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
 fn zoom_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -990,11 +990,8 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.ctx().input_mut(|i| i.events.retain(|e| !swallow_shortcut_text(swallow, e)));
     }
     let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Type a command, e.g. \"insert table\"")).desired_width(380.0));
-    // Only when it lacks focus: `request_focus` always interrupts IME, and on X11 that
-    // recreates the XIM context, so asking every frame left fcitx taking no keys (#2986).
-    if !r.has_focus() {
-        r.request_focus();
-    }
+    // Once: Tab then reaches the commands below, which Enter alone could not (it runs the first).
+    focus_when_shown(ui, &r);
     let reg = app.session.registry.clone();
     // An empty box suggests a few common commands, as Word's Search does.
     let mut hits: Vec<&wordcraft_engine::CommandSpec> = if query.trim().is_empty() {
@@ -1095,8 +1092,7 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.")).small().weak());
         }
     }
-    let (ok, cancel) = buttons(ui, tl!("Close"));
-    ok || cancel
+    close_button(ui) || ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
 fn discard_recovery_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -1214,13 +1210,13 @@ fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     };
     ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(tl!("Password:"));
-        let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
-        if password.is_empty() && !r.has_focus() {
-            r.request_focus();
-        }
-    });
+    let r = ui
+        .horizontal(|ui| {
+            let label = ui.label(tl!("Password:"));
+            ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0)).labelled_by(label.id)
+        })
+        .inner;
+    focus_when_shown(ui, &r);
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
     }
@@ -1239,6 +1235,7 @@ fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             Err(e) if wordcraft_engine::io::wrong_password(&e) => {
                 *message = tl!("That password isn't right. Check it (passwords are case-sensitive) and try again.").to_string();
                 password.as_mut_string().clear();
+                r.request_focus();
             }
             Err(e) => *message = e,
         }
@@ -1253,14 +1250,12 @@ fn encrypt_password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bo
     ui.label(tl!("Anyone who opens the document will need this password."));
     ui.add_space(4.0);
     egui::Grid::new("encrypt_password").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Password:"));
-        let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
-        if password.is_empty() && confirm.is_empty() && !r.has_focus() {
-            r.request_focus();
-        }
+        let label = ui.label(tl!("Password:"));
+        let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0)).labelled_by(label.id);
+        focus_when_shown(ui, &r);
         ui.end_row();
-        ui.label(tl!("Confirm password:"));
-        ui.add(egui::TextEdit::singleline(confirm.as_mut_string()).password(true).desired_width(220.0));
+        let label = ui.label(tl!("Confirm password:"));
+        ui.add(egui::TextEdit::singleline(confirm.as_mut_string()).password(true).desired_width(220.0)).labelled_by(label.id);
         ui.end_row();
     });
     ui.label(
@@ -1300,11 +1295,9 @@ fn field_code_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::FieldCode { code, edit, message } = d else {
         return false;
     };
-    ui.label(tl!("Field codes:"));
-    let r = ui.add(egui::TextEdit::singleline(code).desired_width(320.0).font(egui::TextStyle::Monospace));
-    if !r.has_focus() && code.is_empty() {
-        r.request_focus();
-    }
+    let label = ui.label(tl!("Field codes:"));
+    let r = ui.add(egui::TextEdit::singleline(code).desired_width(320.0).font(egui::TextStyle::Monospace)).labelled_by(label.id);
+    focus_when_shown(ui, &r);
     ui.label(egui::RichText::new("PAGE · NUMPAGES · DATE \\@ \"MMMM d, yyyy\" · AUTHOR · TITLE · SEQ Figure").small().weak());
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).small().weak());

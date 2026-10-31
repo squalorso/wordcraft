@@ -169,8 +169,9 @@ pub(super) fn command_matches(c: &wordcraft_engine::CommandSpec, query: &str) ->
 }
 
 /// The Find and Replace dialog's Go To tab (#712): a page (a number, or `+2` / `-1` from the
-/// current page; empty, Next and Previous step a page) or a bookmark. Returns true to close.
-pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, target: &mut String, message: &mut String) -> bool {
+/// current page; empty, Next and Previous step a page) or a bookmark. The page box takes the
+/// keyboard when the dialog opens here (`focus`), once, so Tab moves on. Returns true to close.
+pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, target: &mut String, message: &mut String, focus: &mut bool) -> bool {
     // The document's bookmarks, only while they are listed (finding them walks the document).
     let bookmarks: Vec<String> = if *what == GoToWhat::Bookmark {
         app.session.doc.bookmarks().into_iter().map(|(n, _)| n).filter(|n| !n.starts_with('_')).collect()
@@ -193,7 +194,7 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
             GoToWhat::Page => {
                 let label = ui.label(tl!("Enter page number:"));
                 let r = ui.add(egui::TextEdit::singleline(target).desired_width(220.0)).labelled_by(label.id);
-                if !r.has_focus() {
+                if std::mem::take(focus) {
                     r.request_focus();
                 }
                 ui.label(egui::RichText::new(tl!("Type +2 or -1 to move from the page you are on.")).weak());
@@ -225,11 +226,16 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         let page_step = *what == GoToWhat::Page && target.trim().is_empty();
-        if page_step && ui.button(tl!("Previous")).clicked() {
-            go = Some(json!({"pageBy": -1}));
-        }
+        let previous = page_step.then(|| ui.button(tl!("Previous")));
         let label = if page_step { tl!("Next") } else { tl!("Go To") };
-        if ui.button(label).clicked() || enter {
+        let next = ui.button(label);
+        let close_button = ui.button(tl!("Close"));
+        // Enter is Next / Go To from anywhere but Previous and Close, which Enter presses: Enter
+        // there went on a page, or closed the dialog after going.
+        let enter = enter && !close_button.has_focus() && !previous.as_ref().is_some_and(|b| b.has_focus());
+        if previous.is_some_and(|b| b.clicked()) {
+            go = Some(json!({"pageBy": -1}));
+        } else if next.clicked() || enter {
             go = match what {
                 GoToWhat::Page => match goto_page(target) {
                     Some(p) => Some(p),
@@ -242,7 +248,7 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
                 GoToWhat::Bookmark => None,
             };
         }
-        if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if close_button.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             close = true;
         }
     });
