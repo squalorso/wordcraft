@@ -134,6 +134,12 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Layout(d) => d.title(),
     };
     let id = egui::Id::unique(("dialog", title));
+    // A dialog that has just opened gives the keyboard to its first control, as Word's do, however
+    // it was opened (Ctrl+D left it on the page, which then took Tab and the arrows behind the
+    // dialog, and screen readers said nothing).
+    if ctx.data(|d| d.get_temp::<(egui::Id, u8)>(dialog_top_key())).is_none_or(|(open, _)| open != id) {
+        app.canvas.dialog_focus_first = true;
+    }
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
     let mut body_rect = None;
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {

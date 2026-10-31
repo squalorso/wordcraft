@@ -2828,6 +2828,56 @@ fn an_item_of_the_keyboard_menu_gives_its_dialog_the_keyboard() {
     assert!(in_font_dialog(&h), "within the dialog");
 }
 
+/// A dialog opened with its shortcut (Ctrl+D, Font) gives the keyboard to its first control, as
+/// Word's dialogs do: the page kept it, so screen readers said nothing and Tab typed a tab behind
+/// the dialog. Tab goes on through the dialog, and Escape gives the page the keyboard back.
+#[test]
+fn a_dialog_opened_from_the_keyboard_takes_the_keyboard() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    run(&mut h);
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    let text = h.state().session.doc.plain_text(StoryRef::Body);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    run(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("font"), "Ctrl+D opened the Font dialog");
+    let in_font_dialog = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.is_focused()).is_some_and(|n| {
+            std::iter::successors(n.accesskit_node().parent(), |p| p.parent())
+                .any(|p| p.role() == Role::Window && p.label().as_deref() == Some("Font"))
+        })
+    };
+    assert!(in_font_dialog(&h), "a control of the dialog has the keyboard");
+    assert!(!h.state().canvas.focused, "not the page");
+    let first = h.ctx.memory(|m| m.focused());
+    h.key_press(egui::Key::Tab);
+    run(&mut h);
+    assert_ne!(h.ctx.memory(|m| m.focused()), first, "Tab moves on");
+    assert!(in_font_dialog(&h), "within the dialog");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text, "and types nothing on the page");
+    h.key_press(egui::Key::Escape);
+    run(&mut h);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert!(h.state().canvas.focused, "and the page has the keyboard again");
+}
+
 /// #3340: review.spelling (the Review tab's Spelling & Grammar button and the Home tab's
 /// Editor button both run it) only moved the selection to the next issue — with no way to see
 /// or apply a suggestion from there, just the generic selection toolbar, it looked broken.

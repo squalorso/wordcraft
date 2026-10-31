@@ -171,8 +171,8 @@ pub struct CanvasState {
     pub context_menu_keyboard: bool,
     /// The context menu's first item still has to take the keyboard (#4977).
     pub context_menu_focus_first: bool,
-    /// An item of the menu opened from the keyboard opened a dialog, whose first control still has
-    /// to take the keyboard: the item that had it is gone (#4977).
+    /// A dialog has just opened, and its first control still has to take the keyboard (its sizing
+    /// pass draws its controls hidden), as in Word (#4977).
     pub dialog_focus_first: bool,
     /// The context menu's items in order, with the layer they're drawn on (the menu's, or a
     /// submenu's), rebuilt each frame the menu is drawn.
@@ -1288,7 +1288,6 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
             // The Enter that chose the item would be the dialog's OK too: the dialog is drawn
             // after the page, in this same frame.
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-            app.canvas.dialog_focus_first = true;
         } else {
             app.canvas.want_focus = true;
         }
