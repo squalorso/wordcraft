@@ -2816,7 +2816,7 @@ fn an_item_of_the_keyboard_menu_gives_its_dialog_the_keyboard() {
     let in_font_dialog = |h: &egui_kittest::Harness<'static, WordApp>| {
         h.query_by(|n| n.is_focused()).is_some_and(|n| {
             std::iter::successors(n.accesskit_node().parent(), |p| p.parent())
-                .any(|p| p.role() == Role::Window && p.label().as_deref() == Some("Font"))
+                .any(|p| matches!(p.role(), Role::Window | Role::Dialog) && p.label().as_deref() == Some("Font"))
         })
     };
     assert!(in_font_dialog(&h), "a control of the dialog has the keyboard");
@@ -2861,7 +2861,7 @@ fn a_dialog_opened_from_the_keyboard_takes_the_keyboard() {
     let in_font_dialog = |h: &egui_kittest::Harness<'static, WordApp>| {
         h.query_by(|n| n.is_focused()).is_some_and(|n| {
             std::iter::successors(n.accesskit_node().parent(), |p| p.parent())
-                .any(|p| p.role() == Role::Window && p.label().as_deref() == Some("Font"))
+                .any(|p| matches!(p.role(), Role::Window | Role::Dialog) && p.label().as_deref() == Some("Font"))
         })
     };
     assert!(in_font_dialog(&h), "a control of the dialog has the keyboard");
