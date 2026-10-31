@@ -442,6 +442,37 @@ fn enter_on_a_go_to_button_presses_that_button() {
     assert_eq!(page(&mut h), Some(1), "without going a page on");
 }
 
+/// Go To: Enter in the page box goes to the page and leaves the keyboard in the box, as in Word,
+/// so the next number can be typed: egui's one-line box let go of it on Enter, and nothing had it.
+#[test]
+fn enter_in_the_go_to_page_box_keeps_the_keyboard_there() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Page 1");
+    for i in 2..=3 {
+        app.run("insert.pageBreak", json!({})).unwrap();
+        app.run("text.insert", json!({"text": format!("Page {i}")})).unwrap();
+    }
+    app.dialog = Dialog::open("goto", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let page = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        let s = &mut h.state_mut().session;
+        s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1)
+    };
+    let in_box = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label()).as_deref() == Some("Enter page number:")
+    };
+    for n in ["3", "1"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(n.into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(page(&mut h).map(|p| p.to_string()).as_deref(), Some(n), "Enter goes to page {n}");
+        assert!(in_box(&h), "and the page box keeps the keyboard");
+    }
+}
+
 /// Word Count has one Close button, as Word's has: Close and Cancel did the same thing, and Tab
 /// went through both. Enter on Close closes it; Enter on the check box is the check box's.
 #[test]

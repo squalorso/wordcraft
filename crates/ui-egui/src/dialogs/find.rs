@@ -199,7 +199,10 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
             GoToWhat::Page => {
                 let label = ui.label(tl!("Enter page number:"));
                 let r = ui.add(egui::TextEdit::singleline(target).desired_width(220.0)).labelled_by(label.id);
-                if std::mem::take(focus) {
+                // Enter goes to the page and keeps the keyboard here, as in Word, for the next
+                // number: a one-line box lets go of the keyboard on Enter (not on Tab, which moves on).
+                let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if std::mem::take(focus) || entered {
                     r.request_focus();
                 }
                 ui.label(egui::RichText::new(tl!("Type +2 or -1 to move from the page you are on.")).weak());
