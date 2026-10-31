@@ -392,7 +392,7 @@ fn tab_leaves_a_dialog_box_and_shift_tab_comes_back() {
 fn tab_to(h: &mut egui_kittest::Harness<'static, WordApp>, name: &str) {
     use egui_kittest::kittest::{NodeT, Queryable};
     let focused = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label());
-    for _ in 0..12 {
+    for _ in 0..30 {
         if focused(h).as_deref() == Some(name) {
             return;
         }
@@ -433,7 +433,7 @@ fn enter_on_a_go_to_button_presses_that_button() {
 }
 
 /// Word Count has one Close button, as Word's has: Close and Cancel did the same thing, and Tab
-/// went through both. Enter still closes it.
+/// went through both. Enter on Close closes it; Enter on the check box is the check box's.
 #[test]
 fn word_count_has_one_close_button() {
     use egui_kittest::kittest::Queryable;
@@ -444,9 +444,55 @@ fn word_count_has_one_close_button() {
     // The other Close is the title bar's close box.
     assert_eq!(h.query_all_by_label("Close").count(), 2, "Close is there");
     assert!(h.query_by_label("Cancel").is_none(), "Cancel is not");
+    // As a screen reader gives it the keyboard (a click doesn't, in egui).
+    h.get_by_label("Count words in text boxes and notes").focus();
+    h.run_steps(2);
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
-    assert!(h.state().dialog.is_none(), "Enter closes it");
+    assert!(h.state().dialog.is_some(), "Enter on the check box leaves the dialog open");
+    tab_to(&mut h, "Close");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "Enter on Close closes it");
+}
+
+/// Find and Replace: turning to the Go To tab puts the keyboard in the page box, once, as opening
+/// on it does; Find what had taken the keyboard when the dialog opened on Find.
+#[test]
+fn turning_to_go_to_puts_the_keyboard_in_the_page_box() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("find", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label());
+    assert_eq!(focused(&h).as_deref(), Some("Find what:"));
+    h.get_by_label("Go To").click();
+    h.run_steps(4);
+    assert_eq!(focused(&h).as_deref(), Some("Enter page number:"), "the page box has the keyboard");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_ne!(focused(&h).as_deref(), Some("Enter page number:"), "and Tab moves on");
+}
+
+/// Search: Enter on "Find … in the document" searches the document, where it ran the first
+/// command the words matched (Enter in the box runs that one).
+#[test]
+fn enter_on_search_find_in_the_document_searches_the_document() {
+    let mut app = app_with("A table of contents");
+    app.dialog = Dialog::open("commands", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    // A key first: the box swallows the text of the shortcut that opened it.
+    h.key_press(egui::Key::T);
+    h.event(egui::Event::Text("table".into()));
+    h.run_steps(2);
+    tab_to(&mut h, "Find \u{201c}table\u{201d} in the document");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "the box closes");
+    assert_eq!(h.state().ui.nav_tab, "results", "the Navigation pane shows the results");
+    assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()), "and no command ran");
 }
 
 /// Open the Paragraph dialog and press OK without changing anything.

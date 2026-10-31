@@ -170,7 +170,8 @@ pub(super) fn command_matches(c: &wordcraft_engine::CommandSpec, query: &str) ->
 
 /// The Find and Replace dialog's Go To tab (#712): a page (a number, or `+2` / `-1` from the
 /// current page; empty, Next and Previous step a page) or a bookmark. The page box takes the
-/// keyboard when the dialog opens here (`focus`), once, so Tab moves on. Returns true to close.
+/// keyboard when the dialog opens or turns to this tab (`focus`), once, so Tab moves on. Returns
+/// true to close.
 pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, target: &mut String, message: &mut String, focus: &mut bool) -> bool {
     // The document's bookmarks, only while they are listed (finding them walks the document).
     let bookmarks: Vec<String> = if *what == GoToWhat::Bookmark {
@@ -201,7 +202,7 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
             }
             GoToWhat::Bookmark => {
                 let label = ui.label(tl!("Enter bookmark name:"));
-                craft_ui::ComboBox::from_id_salt("goto_bookmark")
+                let r = craft_ui::ComboBox::from_id_salt("goto_bookmark")
                     .width(220.0)
                     .selected_text(target.as_str())
                     .show_ui(ui, |ui| {
@@ -211,6 +212,9 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
                     })
                     .response
                     .labelled_by(label.id);
+                if std::mem::take(focus) {
+                    r.request_focus();
+                }
                 if bookmarks.is_empty() {
                     ui.label(egui::RichText::new(tl!("This document has no bookmarks.")).weak());
                 }

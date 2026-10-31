@@ -357,6 +357,8 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if let Some((t, _)) = crate::widgets::dialog_tabs(ui, &names, current).and_then(|k| FIND_TABS.get(k)) {
         *tab = *t;
         message.clear();
+        // The tab's first box takes the keyboard, once (Find what, or Go To's page box).
+        *focus = true;
     }
     ui.add_space(6.0);
     if *tab == FindTab::GoTo {
@@ -782,7 +784,7 @@ fn word_count_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         *stats = v;
     }
     // One Close button, as Word's: Close and Cancel did the same, and Tab went through both.
-    close_button(ui) || ui.input(|i| i.key_pressed(egui::Key::Enter))
+    close_button(ui) || enter_on_nothing(ui)
 }
 
 fn zoom_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -1018,10 +1020,11 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         let label = crate::i18n::fmt(tl!("Find “{text}” in the document"), &[("text", &text)]);
         find = ui.add(egui::Button::new(label).min_size(vec2(380.0, 0.0))).clicked() || (enter && hits.is_empty());
     }
-    if let Some(id) = run {
-        let _ = app.run(id, json!({}));
-    } else if find {
+    // Find first: Enter on its button also reads as Enter for the first command.
+    if find {
         find_in_navigation_pane(app, ui.ctx(), &text);
+    } else if let Some(id) = run {
+        let _ = app.run(id, json!({}));
     }
     run.is_some() || find || ui.input(|i| i.key_pressed(egui::Key::Escape))
 }
@@ -1092,7 +1095,13 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.")).small().weak());
         }
     }
-    close_button(ui) || ui.input(|i| i.key_pressed(egui::Key::Enter))
+    close_button(ui) || enter_on_nothing(ui)
+}
+
+/// Enter with no control focused, which closes a dialog that has only Close: a focused control
+/// takes its Enter itself (About's tabs, Word Count's check box).
+fn enter_on_nothing(ui: &Ui) -> bool {
+    ui.input(|i| i.key_pressed(egui::Key::Enter)) && ui.memory(|m| m.focused().is_none())
 }
 
 fn discard_recovery_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {

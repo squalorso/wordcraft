@@ -140,7 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-10-31: Dialog boxes let Tab move on (#3172): Go To's page box, Search, Icons, New Label, Field codes, Password and Encrypt with Password took the keyboard back in every frame they lacked it, so Tab never reached the dialog's buttons and screen readers said nothing (Search could run only its first command); each now takes the keyboard once, when it is first drawn. The Field codes and password boxes are named by their labels. In Go To, Enter on Previous or Close presses that button; Word Count and About have one Close button, as Word's Word Count does.
+- 2026-10-31: Dialog boxes let Tab move on (#3172): Go To's page box, Search, Icons, New Label, Field codes, Password and Encrypt with Password took the keyboard back in every frame they lacked it, so Tab never reached the dialog's buttons and screen readers said nothing (Search could run only its first command); each now takes the keyboard once, when it is first drawn. The Field codes and password boxes are named by their labels. In Go To, Enter on Previous or Close presses that button; Word Count and About have one Close button, as Word's Word Count does. Turning to the Go To tab puts the keyboard in its page box, and Enter on Search's "Find … in the document" searches the document.
 
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 
