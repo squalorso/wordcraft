@@ -179,11 +179,15 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
     } else {
         Vec::new()
     };
+    // Whether Page or Bookmark has the keyboard: Enter there picks it, and goes nowhere.
+    let mut on_a_kind = false;
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.label(tl!("Go to what:"));
             for (w, label) in [(GoToWhat::Page, "Page"), (GoToWhat::Bookmark, "Bookmark")] {
-                if ui.selectable_label(*what == w, tl!(label)).clicked() && *what != w {
+                let r = ui.selectable_label(*what == w, tl!(label));
+                on_a_kind |= r.has_focus();
+                if r.clicked() && *what != w {
                     *what = w;
                     target.clear();
                     message.clear();
@@ -236,7 +240,7 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
         let close_button = ui.button(tl!("Close"));
         // Enter is Next / Go To from anywhere but Previous and Close, which Enter presses: Enter
         // there went on a page, or closed the dialog after going.
-        let enter = enter && !close_button.has_focus() && !previous.as_ref().is_some_and(|b| b.has_focus());
+        let enter = enter && !on_a_kind && !close_button.has_focus() && !previous.as_ref().is_some_and(|b| b.has_focus());
         if previous.is_some_and(|b| b.clicked()) {
             go = Some(json!({"pageBy": -1}));
         } else if next.clicked() || enter {

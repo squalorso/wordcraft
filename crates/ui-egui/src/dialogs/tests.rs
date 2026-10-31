@@ -406,6 +406,7 @@ fn tab_to(h: &mut egui_kittest::Harness<'static, WordApp>, name: &str) {
 /// Word. On Previous it went a page on; on Close it went a page on, then closed the dialog.
 #[test]
 fn enter_on_a_go_to_button_presses_that_button() {
+    use egui_kittest::kittest::Queryable;
     let mut app = app_with("Page 1");
     for i in 2..=3 {
         app.run("insert.pageBreak", json!({})).unwrap();
@@ -420,6 +421,15 @@ fn enter_on_a_go_to_button_presses_that_button() {
         s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1)
     };
     assert_eq!(page(&mut h), Some(2));
+    // Enter on Bookmark or Page picks it and goes nowhere: it went a page on too.
+    for kind in ["Bookmark", "Page"] {
+        h.get_by_label(kind).focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(page(&mut h), Some(2), "Enter on {kind} stays on page 2");
+    }
+    assert!(matches!(h.state().dialog, Some(Dialog::Find { goto_what: GoToWhat::Page, .. })), "Page is picked");
     tab_to(&mut h, "Previous");
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
@@ -454,6 +464,18 @@ fn word_count_has_one_close_button() {
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
     assert!(h.state().dialog.is_none(), "Enter on Close closes it");
+
+    // Opened while the page keeps the keyboard (as from Search), Enter closes it too.
+    let mut app = app_with("Some words to count");
+    app.canvas.want_focus = true;
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.state_mut().dialog = Dialog::open("wordCount", h.state_mut());
+    h.run_steps(4);
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "Enter closes it");
 }
 
 /// Find and Replace: turning to the Go To tab puts the keyboard in the page box, once, as opening

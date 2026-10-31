@@ -1098,10 +1098,16 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     close_button(ui) || enter_on_nothing(ui)
 }
 
-/// Enter with no control focused, which closes a dialog that has only Close: a focused control
-/// takes its Enter itself (About's tabs, Word Count's check box).
+/// Enter with none of the dialog's own controls focused, which closes a dialog that has only
+/// Close: a focused control takes its Enter itself (About's tabs, Word Count's check box). The
+/// page may have the keyboard behind the dialog (Search's command left it there).
 fn enter_on_nothing(ui: &Ui) -> bool {
-    ui.input(|i| i.key_pressed(egui::Key::Enter)) && ui.memory(|m| m.focused().is_none())
+    let layer = ui.layer_id();
+    let focused = ui.memory(|m| m.focused());
+    let in_dialog = focused.is_some_and(|id| {
+        ui.ctx().viewport(|v| v.this_pass.widgets.get(id).or_else(|| v.prev_pass.widgets.get(id)).is_some_and(|w| w.layer_id == layer))
+    });
+    ui.input(|i| i.key_pressed(egui::Key::Enter)) && !in_dialog
 }
 
 fn discard_recovery_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
