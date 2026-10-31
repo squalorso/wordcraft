@@ -151,8 +151,10 @@ const DIALOG_NAMES: &str = "font paragraph asianTypography tabs borders pageBord
 /// Insert Table (#4982), Field and Encrypt with Password (#5070), Drop Cap and Line Numbers (#5078).
 const NAMED_IN_OPEN_PRS: [&str; 5] = ["insertTable", "fieldCode", "encryptPassword", "dropCap", "lineNumbers"];
 
-/// #3172: every control of every dialog has a name for screen readers, as Word's do. egui_kittest's
-/// accessibility check fails on a box, list or check box without one, as a dialog opens. Many had
+/// #3172: every control of the dialogs in [`DIALOG_NAMES`] has a name for screen readers, as Word's
+/// do, as each dialog first appears (first tab, no selection; other tabs and the dialogs that open
+/// only on a selected object are not reached yet). egui_kittest's accessibility check fails on a
+/// box, list or check box without one, as a dialog opens. Many had
 /// none: the label beside them was never linked to them (`labelled_by`), so NVDA said only "combo
 /// box" or "edit", in Borders and Shading, Insert Hyperlink, Footnote and Endnote, Track Changes
 /// Options, the mail merge rules, Envelopes and Labels, the table dialogs and others.
